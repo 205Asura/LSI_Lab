@@ -1,0 +1,5 @@
+sim/work
+sim/transcript
+sim/*.dbg
+sim/*.wlf
+
