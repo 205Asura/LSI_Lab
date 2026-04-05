@@ -7,10 +7,10 @@ module tb_ring2;
     reg         rep;
     wire [15:0] o;
 
-    top dut (
+    ring_flasher dut  (
         .clk        (clk),
         .rst_n      (rst_n),
-        .repeat_sig        (rep),
+        .repeat_sig (rep),
         .led        (o)
     );
     // Clock 4ns period
