@@ -1,6 +1,6 @@
 module ring_flasher 
 #(
-    parameter INTERVAL = 31'd3 // cycles between each toggle
+    parameter INTERVAL = 16'd3 // cycles between each toggle
 )
 (
     input  wire        clk,
@@ -18,23 +18,24 @@ module ring_flasher
     reg [3:0] toggle_idx;
     wire toggle;
 
-    reg [31:0] timer = INTERVAL;
+    reg [15:0] timer;
     reg timer_run;
 
 
     // Timer
-    assign toggle = (timer == 31'd1);
+    assign toggle = (timer == 16'd1);
     always @(posedge clk) begin
         if (!rst_n) begin
             timer <= INTERVAL;
         end
         else if (timer_run) begin
-            if (timer == 31'd1) begin
+            if (timer == 16'd1)
                 timer <= INTERVAL;
-            end
-            else begin
+            else
                 timer <= timer - 1;
-            end
+        end
+        else begin
+            timer <= INTERVAL;
         end
     end
 
@@ -51,15 +52,15 @@ module ring_flasher
             case (state)
 
                 IDLE: begin
-                    if (repeat_sig && INTERVAL >= 31'd1) begin
-                        timer_run <= 1'b1;
-                        
+                    if (repeat_sig && INTERVAL >= 16'd1) begin
+                        timer_run   <= 1'b1;
                         state       <= CW;
                         led         <= 16'b1;
                         toggle_idx  <= 4'd1;
                         step_count  <= 4'd1;
                     end
                 end
+
 
                 CW: if (toggle) begin
                     led[toggle_idx] <= ~led[toggle_idx];
@@ -78,9 +79,8 @@ module ring_flasher
                     if (step_count < 4'd4) begin
                         led[toggle_idx] <= ~led[toggle_idx];
                         step_count <= step_count + 1;
-                        if (step_count < 4'd3) begin
+                        if (step_count < 4'd3)
                             toggle_idx <= toggle_idx - 1;
-                        end
                     end
                     else if (step_count == 4'd4) begin
                         if (led != 16'd0 || repeat_sig) begin
