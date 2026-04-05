@@ -1,6 +1,6 @@
 module ring_flasher 
 #(
-    parameter INTERVAL = 31'd3
+    parameter INTERVAL = 31'd3 // cycles between each toggle
 )
 (
     input  wire        clk,
@@ -51,7 +51,7 @@ module ring_flasher
             case (state)
 
                 IDLE: begin
-                    if (repeat_sig) begin
+                    if (repeat_sig && INTERVAL >= 31'd1) begin
                         timer_run <= 1'b1;
                         
                         state       <= CW;

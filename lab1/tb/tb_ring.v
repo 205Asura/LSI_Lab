@@ -189,14 +189,15 @@ module tb_ring;
         rep = 1;
         wait_clks(36);    // 3 cycles in
         rst_n = 0;        // reset mid-pattern
-        #8;
+        #5;
         rst_n = 1;
+    
         // rep is still high, so pattern should restart from scratch
-        wait_clks(96);    // full pattern
+        wait_clks(500);    // full pattern
         rep = 0;
         wait_clks(5);
         #1;
-        $finish;
+        $stop;
 
     end
 
