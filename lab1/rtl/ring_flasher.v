@@ -1,6 +1,6 @@
 module ring_flasher 
 #(
-    parameter INTERVAL = 16'd3 // cycles between each toggle
+    parameter INTERVAL = 16'd1 // cycles between each toggle
 )
 (
     input  wire        clk,

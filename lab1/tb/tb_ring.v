@@ -5,22 +5,26 @@ module tb_ring;
     reg         clk;
     reg         rst_n;
     reg         rep;
-    wire [15:0] o;
+    wire [15:0] led;
 
-    localparam INTERVAL = 3;
+    localparam INTERVAL = 1;
 
-    ring_flasher dut (
+    ring_flasher
+    #(
+        .INTERVAL(INTERVAL)
+    )
+    dut (
         .clk        (clk),
         .rst_n      (rst_n),
         .repeat_sig (rep),
-        .led        (o)
+        .led        (led)
     );
 
     initial clk = 0;
     always #2 clk = ~clk;
 
-    localparam CLKS_PER_CYCLE = 12 * INTERVAL;
-    localparam FULL_PATTERN   = 8 * CLKS_PER_CYCLE;
+    localparam CLKS_PER_PATTERN = 12 * INTERVAL;
+    localparam FULL_OPERATION   = 8 * CLKS_PER_PATTERN;
 
     task wait_clks;
         input integer n;
@@ -96,9 +100,9 @@ module tb_ring;
         // TEST 6: Single-shot
         $display("=== TEST 6: Rep goes low mid-pattern ===");
         rep = 1;
-        wait_clks(2 * CLKS_PER_CYCLE);
+        wait_clks(2 * CLKS_PER_PATTERN);
         rep = 0;
-        wait_clks(FULL_PATTERN);
+        wait_clks(FULL_OPERATION);
         #1;
 
         wait_clks(10);
@@ -107,12 +111,12 @@ module tb_ring;
         // TEST 7: Back-to-back patterns
         $display("=== TEST 7: Back-to-back patterns (rep stays high) ===");
         rep = 1;
-        wait_clks(FULL_PATTERN);
+        wait_clks(FULL_OPERATION);
         #1;
         wait_clks(4 * INTERVAL);
         #1;
 
-        wait_clks(FULL_PATTERN);
+        wait_clks(FULL_OPERATION);
         #1;
 
         rst_n = 0;
@@ -136,7 +140,7 @@ module tb_ring;
         rst_n = 1;
         #4;
         rep = 1;
-        wait_clks(FULL_PATTERN);
+        wait_clks(FULL_OPERATION);
         rep = 0;
         wait_clks(5 * INTERVAL);
         #1;
@@ -154,11 +158,11 @@ module tb_ring;
         // TEST 10: Reset recovery
         $display("=== TEST 10: Reset recovery - full pattern after reset ===");
         rep = 1;
-        wait_clks(3 * CLKS_PER_CYCLE);
+        wait_clks(3 * CLKS_PER_PATTERN);
         rst_n = 0;
         #5;
         rst_n = 1;
-        wait_clks(FULL_PATTERN + FULL_PATTERN);
+        wait_clks(FULL_OPERATION + FULL_OPERATION);
         rep = 0;
         wait_clks(5 * INTERVAL);
         #1;
