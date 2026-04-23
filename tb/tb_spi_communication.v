@@ -20,6 +20,11 @@ module tb_SPI_Communication;
 
     integer errors = 0;
 
+    localparam [1:0] CNTL_NOP   = 2'b00;
+    localparam [1:0] CNTL_LOAD  = 2'b01;
+    localparam [1:0] CNTL_SEL   = 2'b10;
+    localparam [1:0] CNTL_START = 2'b11;
+
     SPI_Communication dut (
         .REFCLK   (REFCLK),
         .M_INPUT  (M_INPUT),
@@ -87,14 +92,11 @@ module tb_SPI_Communication;
         end
     endtask
 
-    localparam [1:0] CNTL_NOP   = 2'b00;
-    localparam [1:0] CNTL_LOAD  = 2'b01;
-    localparam [1:0] CNTL_SEL   = 2'b10;
-    localparam [1:0] CNTL_START = 2'b11;
+    
 
     initial begin
-        $dumpfile("spi_tb.vcd");
-        $dumpvars(0, tb_SPI_Communication);
+        $recordfile("spi_tb.vcd");
+        $recordvars(0, tb_SPI_Communication);
 
         M_INPUT = 8'h00;
         M_CNTL  = CNTL_NOP;
