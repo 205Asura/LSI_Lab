@@ -11,5 +11,5 @@ if {[llength [glob -nocomplain ../tb/*.sv]] > 0} { vlog -work work ../tb/*.sv }
 
 vsim -voptargs="+acc -debugdb" -debugDB work.tb_ring
 
-add wave -position insertpoint sim:/tb_ring/dut/*
+add wave -position insertpoint sim:/tb_SPI_Communication/dut/*
 run -all

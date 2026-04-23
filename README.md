@@ -1,1 +1,1 @@
-## Lab 1: Ring Flasher
+## Lab 2: SPI Communication
