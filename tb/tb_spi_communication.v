@@ -18,6 +18,9 @@ module tb_SPI_Communication;
     wire [7:0]  S_OUTPUT;
     wire        S_READY;
 
+    reg  [7:0]  prev_m_output;
+    reg  [7:0]  prev_s_output;
+
     integer errors = 0;
 
     localparam [1:0] CNTL_NOP   = 2'b00;
@@ -66,16 +69,68 @@ module tb_SPI_Communication;
         end
     endtask
 
-    // Helper: full transaction -> wait for M_READY to return high
+        // Helper: full transaction -> wait for M_READY to return high (with timeout)
     task master_start_and_wait;
+        integer timeout;
         begin
             @(posedge REFCLK);
             #1;
-            M_CNTL = 2'b11;
-            @(negedge M_READY);    // transmission started
+            M_CNTL = CNTL_START;
+
+            timeout = 0;
+            while ((M_READY !== 1'b0) && (timeout < 40)) begin
+                @(posedge REFCLK);
+                timeout = timeout + 1;
+            end
+
+            if (M_READY !== 1'b0) begin
+                $display("  FAIL : START timeout (M_READY never went low)");
+                errors = errors + 1;
+                M_CNTL = CNTL_NOP;
+            end else begin
+                #1;
+                M_CNTL = CNTL_NOP;
+
+                timeout = 0;
+                while ((M_READY !== 1'b1) && (timeout < 80)) begin
+                    @(posedge REFCLK);
+                    timeout = timeout + 1;
+                end
+
+                if (M_READY !== 1'b1) begin
+                    $display("  FAIL : DONE timeout (M_READY never returned high)");
+                    errors = errors + 1;
+                end
+            end
+        end
+    endtask
+
+    // Helper: START should be ignored when no slave is selected (SS = 8'hFF)
+    task master_start_expect_no_start;
+        integer i;
+        reg started;
+        begin
+            started = 1'b0;
+
+            @(posedge REFCLK);
             #1;
-            M_CNTL = 2'b00;        // drop CNTL so DONE_WAIT can exit
-            @(posedge M_READY);    // transmission complete
+            M_CNTL = CNTL_START;
+
+            for (i = 0; i < 20; i = i + 1) begin
+                @(posedge REFCLK);
+                if (M_READY === 1'b0)
+                    started = 1'b1;
+            end
+
+            #1;
+            M_CNTL = CNTL_NOP;
+
+            if (started) begin
+                $display("  FAIL : Invalid SS still allowed START");
+                errors = errors + 1;
+            end else begin
+                $display("  PASS : Invalid SS blocked START");
+            end
         end
     endtask
 
@@ -92,11 +147,9 @@ module tb_SPI_Communication;
         end
     endtask
 
-    
-
     initial begin
-        $recordfile("spi_tb.vcd");
-        $recordvars(0, tb_SPI_Communication);
+        $dumpfile("spi_tb.vcd");
+        $dumpvars(0, tb_SPI_Communication);
 
         M_INPUT = 8'h00;
         M_CNTL  = CNTL_NOP;
@@ -142,9 +195,20 @@ module tb_SPI_Communication;
         // Test C : INPUT out of range -> SS should be 8'hFF
         //---------------------------------------------------------------------
         $display("--- Test C : SS out-of-range select (INPUT=9) ---");
+
+        prev_m_output = M_OUTPUT;
+        prev_s_output = S_OUTPUT;
+
         master_cmd(CNTL_SEL, 8'd9);
         #20;
         check(dut.ss_w, 8'hFF, "SS bus");
+
+        // With invalid SS, START must not launch any transfer.
+        master_start_expect_no_start;
+
+        #10;
+        check(M_OUTPUT, prev_m_output, "Master RX unchanged");
+        check(S_OUTPUT, prev_s_output, "Slave  RX unchanged");
 
         #30;
 
@@ -158,5 +222,11 @@ module tb_SPI_Communication;
 
         $finish;
     end
+
+    initial begin
+    $recordfile ("waves");
+    $recordvars ("depth=0", tb_SPI_Communication);
+    end
+
 
 endmodule
