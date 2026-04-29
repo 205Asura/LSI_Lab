@@ -1,6 +1,6 @@
 `timescale 1ps/1ps
 
-// SPI Communication Module - 1-register (circular shift) 
+// SPI Communication Module - 1-register (circular shift) version
 // Design choices:
 //   - Bit order : MSB first
 //   - CPOL      : 0  (SCLK idle LOW)
@@ -55,7 +55,7 @@ module SPI_Communication (
 endmodule
 
 
-// SPI Master 
+// SPI Master (1-register, circular-shift)
 module SPI_Master (
     input  wire        REFCLK,
     input  wire [7:0]  INPUT,
@@ -152,7 +152,7 @@ module SPI_Master (
 endmodule
 
 
-// SPI Slave 
+// SPI Slave (1-register, circular-shift)
 module SPI_Slave (
     input  wire [7:0]  INPUT,
     input  wire        LOAD,
@@ -185,7 +185,6 @@ module SPI_Slave (
             data_reg <= INPUT;
         end
     end
-
     always @(posedge SCLK) begin
         if (!CS) begin
             if (bit_count == 4'd7) begin
@@ -200,7 +199,6 @@ module SPI_Slave (
             transmitting <= 1'b0;
         end
     end
-
     always @(negedge SCLK) begin
         if (!CS && transmitting) begin
             data_reg  <= {data_reg[6:0], MOSI};
