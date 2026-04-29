@@ -1,7 +1,6 @@
-
 `timescale 1ps/1ps
 
-// SPI Communication Module
+// SPI Communication Module - 1-register (circular shift) 
 // Design choices:
 //   - Bit order : MSB first
 //   - CPOL      : 0  (SCLK idle LOW)
@@ -9,24 +8,22 @@
 //   - SS / CS   : active LOW  (spec example: INPUT=3 -> SS=8'b1111_0111)
 //   - SCLK rate : REFCLK / 2  (1 byte = 16 REFCLK cycles, 8 SCLK cycles)
 //   - All non-SPI-transmission logic is posedge-triggered on REFCLK.
-//     Only the Slave's shift-out path uses SCLK negedge.
-
 
 module SPI_Communication (
     input  wire        REFCLK,
-    // Master control 
+    // Master control
     input  wire [7:0]  M_INPUT,
     input  wire [1:0]  M_CNTL,
     output wire [7:0]  M_OUTPUT,
     output wire        M_READY,
-    // Slave control 
+    // Slave control
     input  wire [7:0]  S_INPUT,
     input  wire        S_LOAD,
     output wire [7:0]  S_OUTPUT,
     output wire        S_READY
 );
 
-    // Internal SPI bus 
+    // Internal SPI bus
     wire        mosi_w;
     wire        miso_w;
     wire        sclk_w;
@@ -52,13 +49,13 @@ module SPI_Communication (
         .MOSI   (mosi_w),
         .MISO   (miso_w),
         .SCLK   (sclk_w),
-        .CS     (ss_w[0])  
+        .CS     (ss_w[0])
     );
 
 endmodule
 
 
-// SPI Master
+// SPI Master 
 module SPI_Master (
     input  wire        REFCLK,
     input  wire [7:0]  INPUT,
@@ -71,7 +68,7 @@ module SPI_Master (
     output reg  [7:0]  SS
 );
 
-    // CNTL 
+    // CNTL
     localparam [1:0] CNTL_NOP   = 2'b00;
     localparam [1:0] CNTL_LOAD  = 2'b01;
     localparam [1:0] CNTL_SEL   = 2'b10;
@@ -87,10 +84,8 @@ module SPI_Master (
     reg [3:0] bit_count;
     reg       sclk_reg;
 
-    wire [2:0] bit_index = 3'd7 - bit_count[2:0];
-
     // outputs
-    assign MOSI  = data_reg[bit_index];   // MSB first
+    assign MOSI  = data_reg[7];           // always MSB (circular shift)
     assign SCLK  = sclk_reg;
     assign READY = (state == S_IDLE);     // low during TRANSMIT and DONE_WAIT
 
@@ -98,7 +93,7 @@ module SPI_Master (
         state     = S_IDLE;
         data_reg  = 8'h00;
         OUTPUT    = 8'h00;
-        SS        = 8'hFF;                
+        SS        = 8'hFF;
         bit_count = 4'd0;
         sclk_reg  = 1'b0;
     end
@@ -107,7 +102,7 @@ module SPI_Master (
         case (state)
             S_IDLE: begin
                 case (CNTL)
-                    CNTL_NOP: ; 
+                    CNTL_NOP: ;
 
                     CNTL_LOAD: begin
                         data_reg <= INPUT;
@@ -117,7 +112,7 @@ module SPI_Master (
                         if (INPUT < 8'd8)
                             SS <= ~(8'h01 << INPUT[2:0]);
                         else
-                            SS <= 8'hFF;  
+                            SS <= 8'hFF;
                     end
 
                     CNTL_START: begin
@@ -132,14 +127,12 @@ module SPI_Master (
 
             S_TRANSMIT: begin
                 sclk_reg <= ~sclk_reg;
-
-                if (sclk_reg == 1'b0) begin
-                    data_reg[bit_index] <= MISO;
-                end else begin
+                if (sclk_reg == 1'b1) begin
+                    data_reg <= {data_reg[6:0], MISO};
                     if (bit_count == 4'd7) begin
                         state    <= S_DONE_WAIT;
-                        OUTPUT   <= data_reg;   
-                        sclk_reg <= 1'b0;      
+                        OUTPUT   <= {data_reg[6:0], MISO};
+                        sclk_reg <= 1'b0;
                     end else begin
                         bit_count <= bit_count + 1'b1;
                     end
@@ -159,7 +152,7 @@ module SPI_Master (
 endmodule
 
 
-// SPI Slave
+// SPI Slave 
 module SPI_Slave (
     input  wire [7:0]  INPUT,
     input  wire        LOAD,
@@ -175,10 +168,8 @@ module SPI_Slave (
     reg [3:0] bit_count;
     reg       transmitting;
 
-    //  outputs
-    wire [2:0] bit_index = 3'd7 - bit_count[2:0];
-
-    assign MISO  = data_reg[bit_index];           
+    // outputs
+    assign MISO  = data_reg[7];           // always MSB (circular shift)
     assign READY = !transmitting;
 
     initial begin
@@ -197,7 +188,6 @@ module SPI_Slave (
 
     always @(posedge SCLK) begin
         if (!CS) begin
-            data_reg[bit_index] <= MOSI;
             if (bit_count == 4'd7) begin
                 OUTPUT       <= {data_reg[6:0], MOSI};
                 bit_count    <= 4'd0;
@@ -213,6 +203,7 @@ module SPI_Slave (
 
     always @(negedge SCLK) begin
         if (!CS && transmitting) begin
+            data_reg  <= {data_reg[6:0], MOSI};
             bit_count <= bit_count + 1'b1;
         end
     end

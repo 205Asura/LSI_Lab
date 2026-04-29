@@ -83,20 +83,20 @@ module SPI_Master (
     localparam [1:0] S_DONE_WAIT = 2'b10;
 
     reg [1:0] state;
-    reg [7:0] mosi_shift;
-    reg [7:0] miso_shift;
+    reg [7:0] tx_shift;
+    reg [7:0] rx_shift;
     reg [3:0] bit_count;
     reg       sclk_reg;
 
     // outputs
-    assign MOSI  = mosi_shift[7];         // MSB first
+    assign MOSI  = tx_shift[7];           // MSB first
     assign SCLK  = sclk_reg;
     assign READY = (state == S_IDLE);     // low during TRANSMIT and DONE_WAIT
 
     initial begin
         state     = S_IDLE;
-        mosi_shift = 8'h00;
-        miso_shift = 8'h00;
+        tx_shift  = 8'h00;
+        rx_shift  = 8'h00;
         OUTPUT    = 8'h00;
         SS        = 8'hFF;                
         bit_count = 4'd0;
@@ -110,7 +110,7 @@ module SPI_Master (
                     CNTL_NOP: ; 
 
                     CNTL_LOAD: begin
-                        mosi_shift <= INPUT;
+                        tx_shift <= INPUT;
                     end
 
                     CNTL_SEL: begin
@@ -125,7 +125,7 @@ module SPI_Master (
                             state     <= S_TRANSMIT;
                             bit_count <= 4'd0;
                             sclk_reg  <= 1'b0;
-                            miso_shift <= 8'h00;
+                            rx_shift  <= 8'h00;
                         end
                     end
                 endcase
@@ -135,13 +135,13 @@ module SPI_Master (
                 sclk_reg <= ~sclk_reg;
 
                 if (sclk_reg == 1'b0) begin
-                    miso_shift <= {miso_shift[6:0], MISO};
+                    rx_shift <= {rx_shift[6:0], MISO};
                 end else begin
-                    mosi_shift <= {mosi_shift[6:0], 1'b0};
+                    tx_shift <= {tx_shift[6:0], 1'b0};
 
                     if (bit_count == 4'd7) begin
                         state    <= S_DONE_WAIT;
-                        OUTPUT   <= miso_shift;   
+                        OUTPUT   <= rx_shift;   
                         sclk_reg <= 1'b0;      
                     end else begin
                         bit_count <= bit_count + 1'b1;
@@ -174,18 +174,18 @@ module SPI_Slave (
     input  wire        CS
 );
 
-    reg [7:0] miso_shift;
-    reg [7:0] mosi_shift;
+    reg [7:0] tx_shift;
+    reg [7:0] rx_shift;
     reg [3:0] bit_count;
     reg       transmitting;
 
     //  outputs
-    assign MISO  = miso_shift[7];           
+    assign MISO  = tx_shift[7];           
     assign READY = !transmitting;
 
     initial begin
-        miso_shift   = 8'h00;
-        mosi_shift   = 8'h00;
+        tx_shift     = 8'h00;
+        rx_shift     = 8'h00;
         OUTPUT       = 8'h00;
         bit_count    = 4'd0;
         transmitting = 1'b0;
@@ -194,15 +194,15 @@ module SPI_Slave (
 
     always @(posedge LOAD) begin
         if (!transmitting) begin
-            miso_shift <= INPUT;
+            tx_shift <= INPUT;
         end
     end
 
     always @(posedge SCLK) begin
         if (!CS) begin
-            mosi_shift <= {mosi_shift[6:0], MOSI};
+            rx_shift <= {rx_shift[6:0], MOSI};
             if (bit_count == 4'd7) begin
-                OUTPUT       <= {mosi_shift[6:0], MOSI};
+                OUTPUT       <= {rx_shift[6:0], MOSI};
                 bit_count    <= 4'd0;
                 transmitting <= 1'b0;
             end else begin
@@ -217,7 +217,7 @@ module SPI_Slave (
 
     always @(negedge SCLK) begin
         if (!CS && transmitting) begin
-            miso_shift <= {miso_shift[6:0], 1'b0};
+            tx_shift <= {tx_shift[6:0], 1'b0};
         end
     end
 
