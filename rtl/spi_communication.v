@@ -137,13 +137,14 @@ module SPI_Master (
                 if (sclk_reg == 1'b0) begin
                     rx_shift <= {rx_shift[6:0], MISO};
                 end else begin
-                    tx_shift <= {tx_shift[6:0], 1'b0};
+                
 
                     if (bit_count == 4'd7) begin
                         state    <= S_DONE_WAIT;
-                        OUTPUT   <= rx_shift;   
+                        OUTPUT   <= {rx_shift[6:0], MISO};  
                         sclk_reg <= 1'b0;      
                     end else begin
+                        tx_shift  <= {tx_shift[6:0], 1'b0};
                         bit_count <= bit_count + 1'b1;
                     end
                 end
@@ -180,8 +181,8 @@ module SPI_Slave (
     reg       transmitting;
 
     //  outputs
-    assign MISO  = tx_shift[7];           
-    assign READY = !transmitting;
+    assign MISO  = tx_shift[7];
+    assign READY = !transmitting && CS;
 
     initial begin
         tx_shift     = 8'h00;
@@ -198,8 +199,11 @@ module SPI_Slave (
         end
     end
 
-    always @(posedge SCLK) begin
-        if (!CS) begin
+    always @(posedge SCLK or posedge CS) begin
+        if (CS) begin
+            bit_count    <= 4'd0;
+            transmitting <= 1'b0;
+        end else begin
             rx_shift <= {rx_shift[6:0], MOSI};
             if (bit_count == 4'd7) begin
                 OUTPUT       <= {rx_shift[6:0], MOSI};
@@ -209,10 +213,7 @@ module SPI_Slave (
                 bit_count    <= bit_count + 1'b1;
                 transmitting <= 1'b1;
             end
-        end else begin
-            bit_count    <= 4'd0;
-            transmitting <= 1'b0;
-        end
+        end 
     end
 
     always @(negedge SCLK) begin

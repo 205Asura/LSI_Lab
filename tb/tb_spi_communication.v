@@ -1,6 +1,6 @@
 `timescale 1ns/1ps
 
-// Testbench for SPI_Communication
+// Testbench sequence
 //
 //   Test  1 : Initial / reset state
 //   Test  2 : Basic loopback           (M=0xA5, S=0x3C)
@@ -12,14 +12,16 @@
 //   Test  8 : START blocked when SS = 0xFF
 //   Test  9 : M_READY drops on START, returns high after
 //   Test 10 : M_READY held while CNTL = START is held
-//   Test 11 : LOAD during transmission ignored (master)
+//   Test  11 : LOAD during transmission ignored (master)
 //   Test 12 : SEL  during transmission ignored (master)
 //   Test 13 : Slave LOAD during transmission ignored
 //   Test 14 : NOP doesn't change state
 //   Test 15 : Walking-1 patterns       (8 transfers)
+//   Test 16 : Aborted transaction      (CS forced high mid-transfer)
+//   Test 17 : Loopback test            (3-round cross-feed chain)
 
 module tb_SPI_Communication;
- 
+
     reg         REFCLK;
     reg  [7:0]  M_INPUT;
     reg  [1:0]  M_CNTL;
@@ -29,20 +31,20 @@ module tb_SPI_Communication;
     reg         S_LOAD;
     wire [7:0]  S_OUTPUT;
     wire        S_READY;
- 
+
     reg  [7:0]  prev_m_output;
     reg  [7:0]  prev_s_output;
     reg  [7:0]  prev_ss;
     integer     n;
- 
+
     integer errors = 0;
     integer checks = 0;
- 
+
     localparam [1:0] CNTL_NOP   = 2'b00;
     localparam [1:0] CNTL_LOAD  = 2'b01;
     localparam [1:0] CNTL_SEL   = 2'b10;
     localparam [1:0] CNTL_START = 2'b11;
- 
+
     SPI_Communication dut (
         .REFCLK   (REFCLK),
         .M_INPUT  (M_INPUT),
@@ -54,30 +56,28 @@ module tb_SPI_Communication;
         .S_OUTPUT (S_OUTPUT),
         .S_READY  (S_READY)
     );
- 
+
     // 100 MHz REFCLK
     initial REFCLK = 0;
     always  #5 REFCLK = ~REFCLK;
- 
-    //--------------------------------------------------------------------------
-    // Helper tasks
-    //--------------------------------------------------------------------------
- 
-    // 1-cycle master command and return to NOP
-    task master_cmd(input [1:0] cntl, input [7:0] data);
+
+    // Helper tasks 
+    // Issue a 1-cycle master command then return to NOP.
+    task master_cmd;
+        input [1:0] cntl;
+        input [7:0] data;
         begin
-            @(posedge REFCLK);
-            #1;
+            @(posedge REFCLK); #1;
             M_INPUT = data;
             M_CNTL  = cntl;
-            @(posedge REFCLK);
-            #1;
+            @(posedge REFCLK); #1;
             M_CNTL  = CNTL_NOP;
         end
     endtask
- 
-    // LOAD slave with the given data
-    task slave_load(input [7:0] data);
+
+    // Preload the slave TX shift register.
+    task slave_load;
+        input [7:0] data;
         begin
             #1;
             S_INPUT = data;
@@ -87,21 +87,20 @@ module tb_SPI_Communication;
             S_LOAD  = 1'b0;
         end
     endtask
- 
-    //  START, wait for M_READY low, release CNTL=NOP, wait for M_READY high
+
+    // Assert START, wait for M_READY to go LOW, release to NOP, wait for HIGH.
     task master_start_and_wait;
         integer timeout;
         begin
-            @(posedge REFCLK);
-            #1;
+            @(posedge REFCLK); #1;
             M_CNTL = CNTL_START;
- 
+
             timeout = 0;
             while ((M_READY !== 1'b0) && (timeout < 40)) begin
                 @(posedge REFCLK);
                 timeout = timeout + 1;
             end
- 
+
             if (M_READY !== 1'b0) begin
                 $display("  FAIL : START timeout (M_READY not low)");
                 errors = errors + 1;
@@ -109,13 +108,13 @@ module tb_SPI_Communication;
             end else begin
                 #1;
                 M_CNTL = CNTL_NOP;
- 
+
                 timeout = 0;
                 while ((M_READY !== 1'b1) && (timeout < 80)) begin
                     @(posedge REFCLK);
                     timeout = timeout + 1;
                 end
- 
+
                 if (M_READY !== 1'b1) begin
                     $display("  FAIL : DONE timeout (M_READY not high)");
                     errors = errors + 1;
@@ -123,27 +122,26 @@ module tb_SPI_Communication;
             end
         end
     endtask
- 
-    // START ignored when no slave is selected (SS = 0xFF)
+
+    // Verify that START is ignored when no slave is selected (SS = 0xFF).
     task master_start_expect_no_start;
         integer i;
         reg started;
         begin
             started = 1'b0;
- 
-            @(posedge REFCLK);
-            #1;
+
+            @(posedge REFCLK); #1;
             M_CNTL = CNTL_START;
- 
+
             for (i = 0; i < 20; i = i + 1) begin
                 @(posedge REFCLK);
                 if (M_READY === 1'b0)
                     started = 1'b1;
             end
- 
+
             #1;
             M_CNTL = CNTL_NOP;
- 
+
             checks = checks + 1;
             if (started) begin
                 $display("  FAIL : Invalid SS still allowed START");
@@ -153,9 +151,12 @@ module tb_SPI_Communication;
             end
         end
     endtask
- 
-    // Check tasks
-    task check(input [7:0] got, input [7:0] expected, input [255:0] label);
+
+    // Counting check tasks
+    task check;
+        input [7:0]   got;
+        input [7:0]   expected;
+        input [255:0] label;
         begin
             checks = checks + 1;
             if (got === expected)
@@ -167,8 +168,11 @@ module tb_SPI_Communication;
             end
         end
     endtask
- 
-    task check_eq(input [7:0] got, input [7:0] expected, input [255:0] label);
+
+    task check_eq;
+        input [7:0]   got;
+        input [7:0]   expected;
+        input [255:0] label;
         begin
             checks = checks + 1;
             if (got === expected)
@@ -180,8 +184,11 @@ module tb_SPI_Communication;
             end
         end
     endtask
- 
-    task check_bit(input got, input expected, input [255:0] label);
+
+    task check_bit;
+        input         got;
+        input         expected;
+        input [255:0] label;
         begin
             checks = checks + 1;
             if (got === expected)
@@ -193,11 +200,15 @@ module tb_SPI_Communication;
             end
         end
     endtask
- 
-    //  complete master <-> slave swap and verify
-    task do_swap(input [7:0] m_data, input [7:0] s_data, input [3:0] slave_idx);
+
+    // Complete a master<->slave byte exchange and check both received values.
+    task do_swap;
+        input [7:0] m_data;
+        input [7:0] s_data;
+        input [3:0] slave_idx;
         begin
-            slave_load(s_data);
+            master_cmd(CNTL_SEL, 8'd8);                
+            slave_load(s_data);                          
             master_cmd(CNTL_LOAD, m_data);
             master_cmd(CNTL_SEL, {4'b0000, slave_idx});
             master_start_and_wait;
@@ -206,65 +217,61 @@ module tb_SPI_Communication;
             check(S_OUTPUT, m_data, "Slave  RX");
         end
     endtask
- 
- 
+
+
+    //==========================================================================
     // MAIN TEST SEQUENCE
+    //==========================================================================
 
     initial begin
-        // $recordfile("spi_tb.vcd");
-        // $recordvars(0, tb_SPI_Communication);
+        $dumpfile("spi_tb.vcd");
+        $dumpvars(0, tb_SPI_Communication);
 
         M_INPUT = 8'h00;
         M_CNTL  = CNTL_NOP;
         S_INPUT = 8'h00;
         S_LOAD  = 1'b0;
- 
+
         #25;
- 
-        // Test 1 : Initial / reset state
+
         $display("");
         $display(" Test 1 : Initial / reset state");
         check_bit(M_READY, 1'b1, "M_READY at reset");
         check_bit(S_READY, 1'b1, "S_READY at reset");
         check_eq(dut.ss_w, 8'hFF, "SS bus at reset (no slave)");
- 
+
         #20;
- 
-        // Test 2 : Basic loopback (M=0xA5, S=0x3C)
+
         $display("");
         $display(" Test 2 : Basic loopback (M=0xA5, S=0x3C) ");
         do_swap(8'hA5, 8'h3C, 4'd0);
- 
+
         #30;
- 
-        // Test 3 : Second transfer (M=0x5A, S=0xC3)
+
         $display("");
         $display(" Test 3 : Second transfer (M=0x5A, S=0xC3) ");
         do_swap(8'h5A, 8'hC3, 4'd0);
- 
+
         #30;
- 
-        // Test 4 : all-zeros vs all-ones (both directions)
+
         $display("");
         $display(" Test 4a : 0x00 <-> 0xFF ");
         do_swap(8'h00, 8'hFF, 4'd0);
- 
+
         #30;
- 
+
         $display("");
         $display(" Test 4b : 0xFF <-> 0x00 ");
         do_swap(8'hFF, 8'h00, 4'd0);
- 
+
         #30;
- 
-        // Test 5 : Alternating patterns - 0xAA <-> 0x55
+
         $display("");
         $display(" Test 5 : Alternating (M=0xAA, S=0x55) ");
         do_swap(8'hAA, 8'h55, 4'd0);
- 
+
         #30;
- 
-        // Test 6 : All 8 valid ss
+
         $display("");
         $display(" Test 6 : All 8 valid SS selects ");
         for (n = 0; n < 8; n = n + 1) begin
@@ -279,33 +286,31 @@ module tb_SPI_Communication;
                 errors = errors + 1;
             end
         end
- 
+
         #20;
- 
-        // Test 7 : SEL invalid - INPUT=8 boundary, INPUT=255 maximum
+
         $display("");
-        $display("Test 7a : SEL boundary INPUT=8 -> SS=0xFF ");
-        master_cmd(CNTL_SEL, 8'd0);          // valid: SS=0xFE
+        $display(" Test 7a : SEL boundary INPUT=8 -> SS=0xFF ");
+        master_cmd(CNTL_SEL, 8'd0);
         #5;
         check_eq(dut.ss_w, 8'hFE, "SS before invalid SEL");
-        master_cmd(CNTL_SEL, 8'd8);          // boundary invalid
+        master_cmd(CNTL_SEL, 8'd8);
         #5;
         check_eq(dut.ss_w, 8'hFF, "SS after INPUT=8");
- 
+
         $display("");
-        $display("Test 7b : SEL maximum invalid INPUT=255 ");
+        $display(" Test 7b : SEL maximum invalid INPUT=255 ");
         master_cmd(CNTL_SEL, 8'd0);
         #5;
         check_eq(dut.ss_w, 8'hFE, "SS before invalid SEL");
         master_cmd(CNTL_SEL, 8'd255);
         #5;
         check_eq(dut.ss_w, 8'hFF, "SS after INPUT=255");
- 
+
         #20;
- 
-        // Test 8 : START blocked when SS = 0xFF
+
         $display("");
-        $display("Test 8 : START blocked with SS=0xFF ");
+        $display(" Test 8 : START blocked with SS=0xFF ");
         prev_m_output = M_OUTPUT;
         prev_s_output = S_OUTPUT;
         check_eq(dut.ss_w, 8'hFF, "SS bus");
@@ -313,51 +318,45 @@ module tb_SPI_Communication;
         #10;
         check(M_OUTPUT, prev_m_output, "Master RX unchanged");
         check(S_OUTPUT, prev_s_output, "Slave  RX unchanged");
- 
+
         #20;
- 
-        // Test 9 : M_READY drops on START, returns high after release
+
+        // Test 9: SS=8'hFF here (from Test 8), so slave_load is safe without extra deselect.
         $display("");
-        $display("Test 9 : M_READY drops on START, returns high ");
+        $display(" Test 9 : M_READY drops on START, returns high ");
         slave_load(8'h11);
         master_cmd(CNTL_LOAD, 8'h22);
         master_cmd(CNTL_SEL,  8'd0);
         check_bit(M_READY, 1'b1, "M_READY before START");
- 
-        @(posedge REFCLK);
-        #1;
+
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_START;
-        @(posedge REFCLK);
-        #1;
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_NOP;
         @(posedge REFCLK);
         check_bit(M_READY, 1'b0, "M_READY LOW during transfer");
- 
-        // wait for completion
+
         while (M_READY !== 1'b1) @(posedge REFCLK);
         check_bit(M_READY, 1'b1, "M_READY HIGH after transfer");
         check(M_OUTPUT, 8'h11, "Master RX");
         check(S_OUTPUT, 8'h22, "Slave  RX");
- 
-        #30;
- 
-        // Test 10 : M_READY held LOW while CNTL=START is held
 
+        #30;
+
+        // Tests 10-14: each begins with a deselect so that slave_load finds S_READY=1 
         $display("");
-        $display(" Test 10 : M_READY held while CNTL=START is held");
+        $display(" Test 10 : M_READY held while CNTL=START is held ");
+        master_cmd(CNTL_SEL, 8'd8);     
         slave_load(8'h99);
         master_cmd(CNTL_LOAD, 8'h66);
         master_cmd(CNTL_SEL,  8'd0);
- 
-        // Hold CNTL=START
-        @(posedge REFCLK);
-        #1;
+
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_START;
- 
+
         repeat (40) @(posedge REFCLK);
         check_bit(M_READY, 1'b0, "M_READY LOW (CNTL=START held)");
- 
-        // Release CNTL
+
         #1;
         M_CNTL = CNTL_NOP;
         @(posedge REFCLK);
@@ -365,105 +364,95 @@ module tb_SPI_Communication;
         check_bit(M_READY, 1'b1, "M_READY HIGH after CNTL released");
         check(M_OUTPUT, 8'h99, "Master RX (held-START transfer)");
         check(S_OUTPUT, 8'h66, "Slave  RX (held-START transfer)");
- 
+
         #30;
- 
-        // Test 11 : LOAD during transmission ignored (master)
-  
+
         $display("");
-        $display("Test 11 : LOAD during transmission ignored ");
+        $display(" Test 11 : LOAD during transmission ignored (master) ");
+        master_cmd(CNTL_SEL, 8'd8);     
         slave_load(8'hF0);
-        master_cmd(CNTL_LOAD, 8'h0F);   // original master data
+        master_cmd(CNTL_LOAD, 8'h0F);
         master_cmd(CNTL_SEL,  8'd0);
- 
-        @(posedge REFCLK);
-        #1;
+
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_START;
-        @(posedge REFCLK);
-        #1;
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_NOP;
- 
+
         repeat (6) @(posedge REFCLK);
- 
-        //  load new data mid-transfer (must be ignored)
+
+        // Attempt mid-transfer LOAD 
         #1;
         M_INPUT = 8'hCC;
         M_CNTL  = CNTL_LOAD;
-        @(posedge REFCLK);
-        #1;
-        M_CNTL = CNTL_NOP;
- 
+        @(posedge REFCLK); #1;
+        M_CNTL  = CNTL_NOP;
+
         while (M_READY !== 1'b1) @(posedge REFCLK);
-        check(S_OUTPUT, 8'h0F, "Slave RX (orig 0x0F, not 0xCC)");
+        check(S_OUTPUT, 8'h0F, "Slave  RX (orig 0x0F, not 0xCC)");
         check(M_OUTPUT, 8'hF0, "Master RX");
- 
+
         #30;
- 
-  
-        // Test 12 : SEL during transmission ignored
+
         $display("");
-        $display("--- Test 12 : SEL during transmission ignored ---");
+        $display(" Test 12 : SEL during transmission ignored ");
+        master_cmd(CNTL_SEL, 8'd8);    
         slave_load(8'h11);
         master_cmd(CNTL_LOAD, 8'h22);
-        master_cmd(CNTL_SEL,  8'd0);    // SS = 0xFE
+        master_cmd(CNTL_SEL,  8'd0);   
         prev_ss = dut.ss_w;
         check_eq(prev_ss, 8'hFE, "SS before transfer");
- 
-        @(posedge REFCLK);
-        #1;
+
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_START;
-        @(posedge REFCLK);
-        #1;
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_NOP;
- 
+
         repeat (6) @(posedge REFCLK);
         check_eq(dut.ss_w, 8'hFE, "SS unchanged mid-transfer");
- 
-        // attempt to change selection mid transfer
+
+        // Attempt to change slave selection mid transfer
         #1;
         M_INPUT = 8'd7;
         M_CNTL  = CNTL_SEL;
-        @(posedge REFCLK);
-        #1;
-        M_CNTL = CNTL_NOP;
- 
+        @(posedge REFCLK); #1;
+        M_CNTL  = CNTL_NOP;
+
         repeat (3) @(posedge REFCLK);
         check_eq(dut.ss_w, 8'hFE, "SS unchanged after SEL attempt");
- 
+
         while (M_READY !== 1'b1) @(posedge REFCLK);
         check(M_OUTPUT, 8'h11, "Master RX (SEL was ignored)");
- 
+
         #30;
- 
-        // Test 13 : Slave LOAD during transmission ignored
+
         $display("");
-        $display("--- Test 13 : Slave LOAD during transmission ignored ---");
-        slave_load(8'h33);              // original slave data
+        $display(" Test 13 : Slave LOAD during transmission ignored ---");
+        master_cmd(CNTL_SEL, 8'd8);     
+        slave_load(8'h33);              
         master_cmd(CNTL_LOAD, 8'h44);
         master_cmd(CNTL_SEL,  8'd0);
- 
-        @(posedge REFCLK);
-        #1;
+
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_START;
-        @(posedge REFCLK);
-        #1;
+        @(posedge REFCLK); #1;
         M_CNTL = CNTL_NOP;
- 
+
         repeat (6) @(posedge REFCLK);
         check_bit(S_READY, 1'b0, "S_READY LOW during transfer");
- 
-        // Attempt slave LOAD with new data (must be ignored)
+
+        // Attempt slave LOAD with new data 
         slave_load(8'h99);
- 
+
         while (M_READY !== 1'b1) @(posedge REFCLK);
         check(M_OUTPUT, 8'h33, "Master RX (orig 0x33, not 0x99)");
         check(S_OUTPUT, 8'h44, "Slave  RX");
- 
+
         #30;
- 
-        // Test 14 : NOP doesn't change state
+
         $display("");
-        $display("--- Test 14 : NOP doesn't change state ---");
+        $display(" Test 14 : NOP doesn't change state ");
+        master_cmd(CNTL_SEL, 8'd8);     
         slave_load(8'h77);
         master_cmd(CNTL_LOAD, 8'h88);
         master_cmd(CNTL_SEL,  8'd5);
@@ -472,26 +461,93 @@ module tb_SPI_Communication;
         repeat (5) master_cmd(CNTL_NOP, 8'hAA);
         check_eq(dut.ss_w, prev_ss, "SS preserved through NOPs");
         check_bit(M_READY, 1'b1, "M_READY still HIGH after NOPs");
- 
-        // re-select slave 0 and verify 
+
+        // Re-select slave 0 and transfer to confirm state
         master_cmd(CNTL_SEL, 8'd0);
         master_start_and_wait;
         #10;
         check(M_OUTPUT, 8'h77, "Master RX after NOP test");
         check(S_OUTPUT, 8'h88, "Slave  RX after NOP test");
- 
+
         #30;
- 
-        // Test 15 : 8 transfers 
+
         $display("");
-        $display(" Test 15 : Full transfer pattern");
+        $display(" Test 15 : Walking-1 patterns (8 transfers) ");
         for (n = 0; n < 8; n = n + 1) begin
             do_swap(8'h01 << n, 8'h80 >> n, 4'd0);
         end
- 
+
         #30;
+
+        // Test 16 : Aborted transaction
  
-        // TEST RESULTS
+        $display("");
+        $display(" Test 16 : Aborted transaction ");
+
+        // Do a complete reference transfer to establish a known S_OUTPUT.
+        do_swap(8'hCA, 8'hFE, 4'd0);
+        #10;
+        prev_s_output = S_OUTPUT;           
+
+        master_cmd(CNTL_SEL, 8'd8);       
+        slave_load(8'hBE);                  
+        master_cmd(CNTL_LOAD, 8'hEF);
+        master_cmd(CNTL_SEL,  8'd0);      
+
+        // Start the transfer
+        @(posedge REFCLK); #1;
+        M_CNTL = CNTL_START;
+        @(posedge REFCLK); #1;
+        M_CNTL = CNTL_NOP;
+
+        repeat(8) @(posedge REFCLK);
+        check_bit(S_READY, 1'b0, "S_READY LOW before abort (mid-transfer)");
+
+        // Abort: force CS HIGH on the slave
+
+        force dut.u_slave.CS = 1'b1;
+        repeat(4) @(posedge REFCLK);
+        check_bit(S_READY, 1'b1, "S_READY HIGH immediately after abort");
+        check(S_OUTPUT, prev_s_output, "S_OUTPUT unchanged after aborted transfer");
+
+        while (M_READY !== 1'b1) @(posedge REFCLK);
+
+        release dut.u_slave.CS;
+        master_cmd(CNTL_SEL, 8'd8);        
+
+        #10;
+        $display("  Verify normal operation after abort:");
+        do_swap(8'hA1, 8'hB2, 4'd0);
+        #10;
+        check(M_OUTPUT, 8'hB2, "Master RX post-abort");
+        check(S_OUTPUT, 8'hA1, "Slave  RX post-abort");
+
+        #30;
+
+        // Test 17 : Loopback test
+        $display("");
+        $display("--- Test 17 : Loopback test (3-round cross-feed) ---");
+
+        do_swap(8'hDE, 8'hAD, 4'd0);
+        #10;
+        check(M_OUTPUT, 8'hAD, "Loopback R1: Master RX");
+        check(S_OUTPUT, 8'hDE, "Loopback R1: Slave  RX");
+
+        do_swap(M_OUTPUT, S_OUTPUT, 4'd0);
+        #10;
+        check(M_OUTPUT, 8'hDE, "Loopback R2: Master RX (cross-echo)");
+        check(S_OUTPUT, 8'hAD, "Loopback R2: Slave  RX (cross-echo)");
+
+        do_swap(M_OUTPUT, S_OUTPUT, 4'd0);
+        #10;
+        check(M_OUTPUT, 8'hAD, "Loopback R3: Master RX (stable loop)");
+        check(S_OUTPUT, 8'hDE, "Loopback R3: Slave  RX (stable loop)");
+
+        #30;
+
+        // ══════════════════════════════════════════════════════════════════════
+        // SUMMARY
+        // ══════════════════════════════════════════════════════════════════════
         $display("");
         $display("============================================");
         $display(" Test summary: %0d checks, %0d failure(s)", checks, errors);
@@ -500,14 +556,13 @@ module tb_SPI_Communication;
         else
             $display(" *** %0d TEST(S) FAILED ***", errors);
         $display("============================================");
- 
+
         $finish;
     end
- 
+
     initial begin
-    $recordfile ("waves");
-    $recordvars ("depth=0", tb_SPI_Communication);
+        $recordfile("waves");
+        $recordvars("depth=0", tb_SPI_Communication);
     end
- 
- 
+
 endmodule
