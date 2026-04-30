@@ -1,4 +1,3 @@
-
 `timescale 1ps/1ps
 
 // SPI Communication Module
@@ -141,8 +140,8 @@ module SPI_Master (
 
                     if (bit_count == 4'd7) begin
                         state    <= S_DONE_WAIT;
-                        OUTPUT   <= {rx_shift[6:0], MISO};  
-                        sclk_reg <= 1'b0;      
+                        OUTPUT   <= rx_shift;   
+                        sclk_reg <= 1'b0;
                     end else begin
                         tx_shift  <= {tx_shift[6:0], 1'b0};
                         bit_count <= bit_count + 1'b1;
