@@ -193,7 +193,7 @@ module SPI_Slave (
 
 
     always @(posedge LOAD) begin
-        if (!transmitting) begin
+        if (READY) begin
             tx_shift <= INPUT;
         end
     end

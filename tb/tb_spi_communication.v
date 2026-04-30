@@ -211,9 +211,9 @@ module tb_SPI_Communication;
     // MAIN TEST SEQUENCE
 
     initial begin
-        $dumpfile("spi_tb.vcd");
-        $dumpvars(0, tb_SPI_Communication);
- 
+        // $recordfile("spi_tb.vcd");
+        // $recordvars(0, tb_SPI_Communication);
+
         M_INPUT = 8'h00;
         M_CNTL  = CNTL_NOP;
         S_INPUT = 8'h00;
