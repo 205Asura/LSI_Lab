@@ -97,6 +97,7 @@ module SPI_Master (
         SS        = 8'hFF;
         bit_count = 4'd0;
         sclk_reg  = 1'b0;
+        miso_sample = 1'b0;
     end
 
     always @(posedge REFCLK) begin
@@ -179,7 +180,7 @@ module SPI_Slave (
 
     // outputs
     assign MISO  = data_reg[7];           // always MSB (circular shift)
-    assign READY = !transmitting;
+    assign READY = !transmitting && CS;
 
     initial begin
         data_reg     = 8'h00;
@@ -191,7 +192,7 @@ module SPI_Slave (
 
 
     always @(posedge LOAD) begin
-        if (!transmitting) begin
+        if (READY) begin
             data_reg <= INPUT;
         end
     end
@@ -204,19 +205,17 @@ module SPI_Slave (
 
     always @(negedge SCLK or posedge CS) begin
         if (CS) begin
-            bit_count    = 4'd0;
-            transmitting = 1'b0;
+            bit_count    <= 4'd0;
+            transmitting <= 1'b0;
         end
-        else
-        if (!CS) begin
+        else begin
             data_reg <= {data_reg[6:0], mosi_sample};
             if (bit_count < 4'd7) begin
                 bit_count <= bit_count + 1;
                 if (!transmitting) 
                     transmitting <= 1'b1;
             end
-            else
-            if (bit_count == 4'd7) begin
+            else if (bit_count == 4'd7) begin
                 OUTPUT <= {data_reg[6:0], mosi_sample};
                 bit_count <= 4'd0;
                 transmitting <= 1'b0;
