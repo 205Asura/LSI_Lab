@@ -204,8 +204,8 @@ module SPI_Slave (
 
     always @(negedge SCLK or posedge CS) begin
         if (CS) begin
-            bit_count    = 4'd0;
-            transmitting = 1'b0;
+            bit_count    <= 4'd0;
+            transmitting <= 1'b0;
         end
         else
         if (!CS) begin

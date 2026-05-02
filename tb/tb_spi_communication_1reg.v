@@ -18,7 +18,7 @@
 //   Test 14 : NOP doesn't change state
 //   Test 15 : Walking-1 patterns       (8 transfers)
 
-module tb_SPI_Communication;
+module tb_SPI_Communication_1reg;
  
     reg         REFCLK;
     reg  [7:0]  M_INPUT;
