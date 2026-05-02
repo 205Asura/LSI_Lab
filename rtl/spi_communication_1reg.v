@@ -9,7 +9,7 @@
 //   - SCLK rate : REFCLK / 2  (1 byte = 16 REFCLK cycles, 8 SCLK cycles)
 //   - All non-SPI-transmission logic is posedge-triggered on REFCLK.
 
-module SPI_Communication (
+module SPI_Communication_1reg (
     input  wire        REFCLK,
     // Master control
     input  wire [7:0]  M_INPUT,
@@ -82,7 +82,8 @@ module SPI_Master (
     reg [1:0] state;
     reg [7:0] data_reg;
     reg [3:0] bit_count;
-    reg       sclk_reg;
+    reg       sclk_reg = 0;
+    reg       miso_sample;
 
     // outputs
     assign MOSI  = data_reg[7];           // always MSB (circular shift)
@@ -127,15 +128,20 @@ module SPI_Master (
 
             S_TRANSMIT: begin
                 sclk_reg <= ~sclk_reg;
-                if (sclk_reg == 1'b1) begin
-                    data_reg <= {data_reg[6:0], MISO};
+            
+                if (!sclk_reg) begin
+                    miso_sample <= MISO;
+                end
+
+                else if (sclk_reg) begin
+                    data_reg <= {data_reg[6:0], miso_sample};
                     if (bit_count == 4'd7) begin
-                        state    <= S_DONE_WAIT;
-                        OUTPUT   <= {data_reg[6:0], MISO};
-                        sclk_reg <= 1'b0;
-                    end else begin
-                        bit_count <= bit_count + 1'b1;
+                        OUTPUT <= {data_reg[6:0], miso_sample};
+                        bit_count <= 4'd0;
+                        state <= S_DONE_WAIT;
                     end
+                    else
+                        bit_count <= bit_count + 1;
                 end
             end
 
@@ -148,6 +154,8 @@ module SPI_Master (
             default: state <= S_IDLE;
         endcase
     end
+
+    
 
 endmodule
 
@@ -167,6 +175,7 @@ module SPI_Slave (
     reg [7:0] data_reg;
     reg [3:0] bit_count;
     reg       transmitting;
+    reg       mosi_sample;
 
     // outputs
     assign MISO  = data_reg[7];           // always MSB (circular shift)
@@ -177,6 +186,7 @@ module SPI_Slave (
         OUTPUT       = 8'h00;
         bit_count    = 4'd0;
         transmitting = 1'b0;
+        mosi_sample = 1'b0;
     end
 
 
@@ -185,24 +195,32 @@ module SPI_Slave (
             data_reg <= INPUT;
         end
     end
+    
     always @(posedge SCLK) begin
         if (!CS) begin
-            if (bit_count == 4'd7) begin
-                OUTPUT       <= {data_reg[6:0], MOSI};
-                bit_count    <= 4'd0;
-                transmitting <= 1'b0;
-            end else begin
-                transmitting <= 1'b1;
-            end
-        end else begin
-            bit_count    <= 4'd0;
-            transmitting <= 1'b0;
+            mosi_sample <= MOSI;
         end
     end
-    always @(negedge SCLK) begin
-        if (!CS && transmitting) begin
-            data_reg  <= {data_reg[6:0], MOSI};
-            bit_count <= bit_count + 1'b1;
+
+    always @(negedge SCLK or posedge CS) begin
+        if (CS) begin
+            bit_count    = 4'd0;
+            transmitting = 1'b0;
+        end
+        else
+        if (!CS) begin
+            data_reg <= {data_reg[6:0], mosi_sample};
+            if (bit_count < 4'd7) begin
+                bit_count <= bit_count + 1;
+                if (!transmitting) 
+                    transmitting <= 1'b1;
+            end
+            else
+            if (bit_count == 4'd7) begin
+                OUTPUT <= {data_reg[6:0], mosi_sample};
+                bit_count <= 4'd0;
+                transmitting <= 1'b0;
+            end
         end
     end
 
