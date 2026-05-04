@@ -45,7 +45,7 @@ module tb_SPI_Communication;
     localparam [1:0] CNTL_SEL   = 2'b10;
     localparam [1:0] CNTL_START = 2'b11;
 
-    SPI_Communication_1reg dut (
+    SPI_Communication dut (
         .REFCLK   (REFCLK),
         .M_INPUT  (M_INPUT),
         .M_CNTL   (M_CNTL),

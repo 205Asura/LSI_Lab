@@ -1,6 +1,6 @@
 `timescale 1ps/1ps
 
-// SPI Communication Module
+// SPI Communication Module - 1-register (circular shift) version
 // Design choices:
 //   - Bit order : MSB first
 //   - CPOL      : 0  (SCLK idle LOW)
@@ -8,24 +8,22 @@
 //   - SS / CS   : active LOW  (spec example: INPUT=3 -> SS=8'b1111_0111)
 //   - SCLK rate : REFCLK / 2  (1 byte = 16 REFCLK cycles, 8 SCLK cycles)
 //   - All non-SPI-transmission logic is posedge-triggered on REFCLK.
-//     Only the Slave's shift-out path uses SCLK negedge.
-
 
 module SPI_Communication (
     input  wire        REFCLK,
-    // Master control 
+    // Master control
     input  wire [7:0]  M_INPUT,
     input  wire [1:0]  M_CNTL,
     output wire [7:0]  M_OUTPUT,
     output wire        M_READY,
-    // Slave control 
+    // Slave control
     input  wire [7:0]  S_INPUT,
     input  wire        S_LOAD,
     output wire [7:0]  S_OUTPUT,
     output wire        S_READY
 );
 
-    // Internal SPI bus 
+    // Internal SPI bus
     wire        mosi_w;
     wire        miso_w;
     wire        sclk_w;
@@ -51,13 +49,13 @@ module SPI_Communication (
         .MOSI   (mosi_w),
         .MISO   (miso_w),
         .SCLK   (sclk_w),
-        .CS     (ss_w[0])  
+        .CS     (ss_w[0])
     );
 
 endmodule
 
 
-// SPI Master
+// SPI Master (1-register, circular-shift)
 module SPI_Master (
     input  wire        REFCLK,
     input  wire [7:0]  INPUT,
@@ -70,7 +68,7 @@ module SPI_Master (
     output reg  [7:0]  SS
 );
 
-    // CNTL 
+    // CNTL
     localparam [1:0] CNTL_NOP   = 2'b00;
     localparam [1:0] CNTL_LOAD  = 2'b01;
     localparam [1:0] CNTL_SEL   = 2'b10;
@@ -82,41 +80,41 @@ module SPI_Master (
     localparam [1:0] S_DONE_WAIT = 2'b10;
 
     reg [1:0] state;
-    reg [7:0] tx_shift;
-    reg [7:0] rx_shift;
+    reg [7:0] data_reg;
     reg [3:0] bit_count;
-    reg       sclk_reg;
+    reg       sclk_reg = 0;
+    reg       miso_sample;
 
     // outputs
-    assign MOSI  = tx_shift[7];           // MSB first
+    assign MOSI  = data_reg[7];           // always MSB (circular shift)
     assign SCLK  = sclk_reg;
     assign READY = (state == S_IDLE);     // low during TRANSMIT and DONE_WAIT
 
     initial begin
         state     = S_IDLE;
-        tx_shift  = 8'h00;
-        rx_shift  = 8'h00;
+        data_reg  = 8'h00;
         OUTPUT    = 8'h00;
-        SS        = 8'hFF;                
+        SS        = 8'hFF;
         bit_count = 4'd0;
         sclk_reg  = 1'b0;
+        miso_sample = 1'b0;
     end
 
     always @(posedge REFCLK) begin
         case (state)
             S_IDLE: begin
                 case (CNTL)
-                    CNTL_NOP: ; 
+                    CNTL_NOP: ;
 
                     CNTL_LOAD: begin
-                        tx_shift <= INPUT;
+                        data_reg <= INPUT;
                     end
 
                     CNTL_SEL: begin
                         if (INPUT < 8'd8)
                             SS <= ~(8'h01 << INPUT[2:0]);
                         else
-                            SS <= 8'hFF;  
+                            SS <= 8'hFF;
                     end
 
                     CNTL_START: begin
@@ -124,7 +122,6 @@ module SPI_Master (
                             state     <= S_TRANSMIT;
                             bit_count <= 4'd0;
                             sclk_reg  <= 1'b0;
-                            rx_shift  <= 8'h00;
                         end
                     end
                 endcase
@@ -132,20 +129,20 @@ module SPI_Master (
 
             S_TRANSMIT: begin
                 sclk_reg <= ~sclk_reg;
+            
+                if (!sclk_reg) begin
+                    miso_sample <= MISO;
+                end
 
-                if (sclk_reg == 1'b0) begin
-                    rx_shift <= {rx_shift[6:0], MISO};
-                end else begin
-                
-
+                else if (sclk_reg) begin
+                    data_reg <= {data_reg[6:0], miso_sample};
                     if (bit_count == 4'd7) begin
-                        state    <= S_DONE_WAIT;
-                        OUTPUT   <= rx_shift;   
-                        sclk_reg <= 1'b0;
-                    end else begin
-                        tx_shift  <= {tx_shift[6:0], 1'b0};
-                        bit_count <= bit_count + 1'b1;
+                        OUTPUT <= {data_reg[6:0], miso_sample};
+                        bit_count <= 4'd0;
+                        state <= S_DONE_WAIT;
                     end
+                    else
+                        bit_count <= bit_count + 1;
                 end
             end
 
@@ -159,10 +156,12 @@ module SPI_Master (
         endcase
     end
 
+    
+
 endmodule
 
 
-// SPI Slave
+// SPI Slave (1-register, circular-shift)
 module SPI_Slave (
     input  wire [7:0]  INPUT,
     input  wire        LOAD,
@@ -174,50 +173,53 @@ module SPI_Slave (
     input  wire        CS
 );
 
-    reg [7:0] tx_shift;
-    reg [7:0] rx_shift;
+    reg [7:0] data_reg;
     reg [3:0] bit_count;
     reg       transmitting;
+    reg       mosi_sample;
 
-    //  outputs
-    assign MISO  = tx_shift[7];
+    // outputs
+    assign MISO  = data_reg[7];           // always MSB (circular shift)
     assign READY = !transmitting && CS;
 
     initial begin
-        tx_shift     = 8'h00;
-        rx_shift     = 8'h00;
+        data_reg     = 8'h00;
         OUTPUT       = 8'h00;
         bit_count    = 4'd0;
         transmitting = 1'b0;
+        mosi_sample = 1'b0;
     end
 
 
     always @(posedge LOAD) begin
         if (READY) begin
-            tx_shift <= INPUT;
+            data_reg <= INPUT;
+        end
+    end
+    
+    always @(posedge SCLK) begin
+        if (!CS) begin
+            mosi_sample <= MOSI;
         end
     end
 
-    always @(posedge SCLK or posedge CS) begin
+    always @(negedge SCLK or posedge CS) begin
         if (CS) begin
             bit_count    <= 4'd0;
             transmitting <= 1'b0;
-        end else begin
-            rx_shift <= {rx_shift[6:0], MOSI};
-            if (bit_count == 4'd7) begin
-                OUTPUT       <= {rx_shift[6:0], MOSI};
-                bit_count    <= 4'd0;
-                transmitting <= 1'b0;
-            end else begin
-                bit_count    <= bit_count + 1'b1;
-                transmitting <= 1'b1;
+        end
+        else begin
+            data_reg <= {data_reg[6:0], mosi_sample};
+            if (bit_count < 4'd7) begin
+                bit_count <= bit_count + 1;
+                if (!transmitting) 
+                    transmitting <= 1'b1;
             end
-        end 
-    end
-
-    always @(negedge SCLK) begin
-        if (!CS && transmitting) begin
-            tx_shift <= {tx_shift[6:0], 1'b0};
+            else if (bit_count == 4'd7) begin
+                OUTPUT <= {data_reg[6:0], mosi_sample};
+                bit_count <= 4'd0;
+                transmitting <= 1'b0;
+            end
         end
     end
 
