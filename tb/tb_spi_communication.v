@@ -45,7 +45,7 @@ module tb_SPI_Communication;
     localparam [1:0] CNTL_SEL   = 2'b10;
     localparam [1:0] CNTL_START = 2'b11;
 
-    SPI_Communication dut (
+    SPI_Communication_1reg dut (
         .REFCLK   (REFCLK),
         .M_INPUT  (M_INPUT),
         .M_CNTL   (M_CNTL),
@@ -67,11 +67,11 @@ module tb_SPI_Communication;
         input [1:0] cntl;
         input [7:0] data;
         begin
-            @(posedge REFCLK); #1;
-            M_INPUT = data;
-            M_CNTL  = cntl;
-            @(posedge REFCLK); #1;
-            M_CNTL  = CNTL_NOP;
+            @(posedge REFCLK);
+            M_INPUT <= data;
+            M_CNTL  <= cntl;
+            @(posedge REFCLK);
+            M_CNTL  <= CNTL_NOP;
         end
     endtask
 
@@ -79,12 +79,10 @@ module tb_SPI_Communication;
     task slave_load;
         input [7:0] data;
         begin
-            #1;
-            S_INPUT = data;
-            #1;
-            S_LOAD  = 1'b1;
+            S_INPUT <= data;
+            S_LOAD  <= 1'b1;
             #10;
-            S_LOAD  = 1'b0;
+            S_LOAD  <= 1'b0;
         end
     endtask
 
@@ -92,8 +90,8 @@ module tb_SPI_Communication;
     task master_start_and_wait;
         integer timeout;
         begin
-            @(posedge REFCLK); #1;
-            M_CNTL = CNTL_START;
+            @(posedge REFCLK);
+            M_CNTL <= CNTL_START;
 
             timeout = 0;
             while ((M_READY !== 1'b0) && (timeout < 40)) begin
@@ -104,10 +102,9 @@ module tb_SPI_Communication;
             if (M_READY !== 1'b0) begin
                 $display("  FAIL : START timeout (M_READY not low)");
                 errors = errors + 1;
-                M_CNTL = CNTL_NOP;
+                M_CNTL <= CNTL_NOP;
             end else begin
-                #1;
-                M_CNTL = CNTL_NOP;
+                M_CNTL <= CNTL_NOP;
 
                 timeout = 0;
                 while ((M_READY !== 1'b1) && (timeout < 80)) begin
@@ -130,8 +127,8 @@ module tb_SPI_Communication;
         begin
             started = 1'b0;
 
-            @(posedge REFCLK); #1;
-            M_CNTL = CNTL_START;
+            @(posedge REFCLK);
+            M_CNTL <= CNTL_START;
 
             for (i = 0; i < 20; i = i + 1) begin
                 @(posedge REFCLK);
@@ -139,8 +136,7 @@ module tb_SPI_Communication;
                     started = 1'b1;
             end
 
-            #1;
-            M_CNTL = CNTL_NOP;
+            M_CNTL <= CNTL_NOP;
 
             checks = checks + 1;
             if (started) begin
@@ -329,10 +325,10 @@ module tb_SPI_Communication;
         master_cmd(CNTL_SEL,  8'd0);
         check_bit(M_READY, 1'b1, "M_READY before START");
 
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_START;
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_NOP;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_START;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_NOP;
         @(posedge REFCLK);
         check_bit(M_READY, 1'b0, "M_READY LOW during transfer");
 
@@ -351,14 +347,13 @@ module tb_SPI_Communication;
         master_cmd(CNTL_LOAD, 8'h66);
         master_cmd(CNTL_SEL,  8'd0);
 
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_START;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_START;
 
         repeat (40) @(posedge REFCLK);
         check_bit(M_READY, 1'b0, "M_READY LOW (CNTL=START held)");
 
-        #1;
-        M_CNTL = CNTL_NOP;
+        M_CNTL <= CNTL_NOP;
         @(posedge REFCLK);
         @(posedge REFCLK);
         check_bit(M_READY, 1'b1, "M_READY HIGH after CNTL released");
@@ -374,19 +369,18 @@ module tb_SPI_Communication;
         master_cmd(CNTL_LOAD, 8'h0F);
         master_cmd(CNTL_SEL,  8'd0);
 
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_START;
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_NOP;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_START;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_NOP;
 
         repeat (6) @(posedge REFCLK);
 
         // Attempt mid-transfer LOAD 
-        #1;
-        M_INPUT = 8'hCC;
-        M_CNTL  = CNTL_LOAD;
-        @(posedge REFCLK); #1;
-        M_CNTL  = CNTL_NOP;
+        M_INPUT <= 8'hCC;
+        M_CNTL  <= CNTL_LOAD;
+        @(posedge REFCLK);
+        M_CNTL  <= CNTL_NOP;
 
         while (M_READY !== 1'b1) @(posedge REFCLK);
         check(S_OUTPUT, 8'h0F, "Slave  RX (orig 0x0F, not 0xCC)");
@@ -400,23 +394,22 @@ module tb_SPI_Communication;
         slave_load(8'h11);
         master_cmd(CNTL_LOAD, 8'h22);
         master_cmd(CNTL_SEL,  8'd0);   
-        prev_ss = dut.ss_w;
+        #1 prev_ss = dut.ss_w;
         check_eq(prev_ss, 8'hFE, "SS before transfer");
 
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_START;
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_NOP;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_START;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_NOP;
 
         repeat (6) @(posedge REFCLK);
         check_eq(dut.ss_w, 8'hFE, "SS unchanged mid-transfer");
 
         // Attempt to change slave selection mid transfer
-        #1;
-        M_INPUT = 8'd7;
-        M_CNTL  = CNTL_SEL;
-        @(posedge REFCLK); #1;
-        M_CNTL  = CNTL_NOP;
+        M_INPUT <= 8'd7;
+        M_CNTL  <= CNTL_SEL;
+        @(posedge REFCLK); 
+        M_CNTL  <= CNTL_NOP;
 
         repeat (3) @(posedge REFCLK);
         check_eq(dut.ss_w, 8'hFE, "SS unchanged after SEL attempt");
@@ -433,10 +426,10 @@ module tb_SPI_Communication;
         master_cmd(CNTL_LOAD, 8'h44);
         master_cmd(CNTL_SEL,  8'd0);
 
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_START;
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_NOP;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_START;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_NOP;
 
         repeat (6) @(posedge REFCLK);
         check_bit(S_READY, 1'b0, "S_READY LOW during transfer");
@@ -452,11 +445,12 @@ module tb_SPI_Communication;
 
         $display("");
         $display(" Test 14 : NOP doesn't change state ");
-        master_cmd(CNTL_SEL, 8'd8);     
+        master_cmd(CNTL_SEL, 8'd8);
+        @(posedge REFCLK);     
         slave_load(8'h77);
         master_cmd(CNTL_LOAD, 8'h88);
         master_cmd(CNTL_SEL,  8'd5);
-        prev_ss = dut.ss_w;
+        #1 prev_ss = dut.ss_w;
         check_eq(prev_ss, 8'hDF, "SS for slave 5");
         repeat (5) master_cmd(CNTL_NOP, 8'hAA);
         check_eq(dut.ss_w, prev_ss, "SS preserved through NOPs");
@@ -495,10 +489,10 @@ module tb_SPI_Communication;
         master_cmd(CNTL_SEL,  8'd0);      
 
         // Start the transfer
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_START;
-        @(posedge REFCLK); #1;
-        M_CNTL = CNTL_NOP;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_START;
+        @(posedge REFCLK);
+        M_CNTL <= CNTL_NOP;
 
         repeat(8) @(posedge REFCLK);
         check_bit(S_READY, 1'b0, "S_READY LOW before abort (mid-transfer)");
