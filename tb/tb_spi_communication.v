@@ -75,10 +75,10 @@ module tb_SPI_Communication;
         end
     endtask
 
-    // Preload the slave TX shift register.
     task slave_load;
         input [7:0] data;
         begin
+            @(posedge REFCLK);
             S_INPUT <= data;
             S_LOAD  <= 1'b1;
             #10;
