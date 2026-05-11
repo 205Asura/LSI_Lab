@@ -1,1 +1,2 @@
-## Lab 2: SPI Communication
+## Lab 3: Cubic solver with real and complex (imaginary) solutions,
+Floating Point 32 Implementation
