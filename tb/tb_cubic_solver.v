@@ -353,4 +353,9 @@ module tb_cubic_solver;
     // hard watchdog
     initial begin #500000; $display("*** SIM WATCHDOG TIMEOUT ***"); $finish; end
 
+    initial begin
+        $recordfile ("waves")
+        $recordvars ("depth=0", tb_cubic_solver)
+        
+    end 
 endmodule
