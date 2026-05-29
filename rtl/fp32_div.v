@@ -35,7 +35,6 @@ module fp32_div (
     wire b_zero = (eb == 8'h00);
 
     // Decode a (just for special-case handling at the end)
-    wire        sa = a[31];
     wire [7:0]  ea = a[30:23];
     wire [22:0] fa_bits = a[22:0];
     wire a_nan  = (ea == 8'hFF) && (fa_bits != 23'h0);

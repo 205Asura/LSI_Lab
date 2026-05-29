@@ -136,7 +136,6 @@ module cubic_solver (
     reg [31:0] theta_arg, theta_v, theta3;
     reg [31:0] cos0_v, cos1_v, cos2_v;
     reg [31:0] arg1_v, arg2_v;
-    reg [31:0] t0_re_v, t1_re_v, t2_re_v;       // before unshift
 
     // D = 0 regs
     reg [31:0] nqh, r_z, simple_root;
@@ -165,7 +164,6 @@ module cubic_solver (
 
     // Branch decoding (combinational on D_v) 
     wire D_zero = (D_v[30:0] == 31'b0);
-    wire D_neg  = D_v[31] && !D_zero;
     wire D_pos  = !D_v[31] && !D_zero;
 
     // a == 0 detection
@@ -259,7 +257,6 @@ module cubic_solver (
     end
 
     // Sequential : state transitions and result capture
-    integer  i;
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state    <= ST_IDLE;
@@ -285,7 +282,6 @@ module cubic_solver (
             theta_arg <= FP_ZERO; theta_v <= FP_ZERO; theta3 <= FP_ZERO;
             cos0_v <= FP_ZERO; cos1_v <= FP_ZERO; cos2_v <= FP_ZERO;
             arg1_v <= FP_ZERO; arg2_v <= FP_ZERO;
-            t0_re_v <= FP_ZERO; t1_re_v <= FP_ZERO; t2_re_v <= FP_ZERO;
             nqh <= FP_ZERO; r_z <= FP_ZERO; simple_root <= FP_ZERO;
             root0_re <= FP_ZERO; root0_im <= FP_ZERO;
             root1_re <= FP_ZERO; root1_im <= FP_ZERO;
