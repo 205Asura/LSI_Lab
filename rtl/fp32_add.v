@@ -50,11 +50,26 @@ module fp32_add (
     wire        ss = a_ge ? sb : sa;
 
     // Align : right-shift the smaller mantissa by the exponent difference.
-    // Bit layout (28 bits) : [27]=carry, [26]=hidden 1, [25:3]=fraction, [2:0]=guard
+    // Bit layout (28 bits) : [27]=carry, [26]=hidden 1, [25:3]=fraction, [2:0]=guard, round, sticky
     wire [7:0]  shamt   = el - es;
     wire [27:0] ml_ext  = {1'b0, ml, 3'b000};
     wire [27:0] ms_ext  = {1'b0, ms, 3'b000};
-    wire [27:0] ms_alig = (shamt >= 8'd28) ? 28'h0 : (ms_ext >> shamt);
+    
+    // Check if any 1s are lost when shifting ms_ext to the right.
+    // Since ms is padded with 3 zeros, bits are only lost if shamt > 3.
+    reg align_sticky;
+    always @* begin
+        if (shamt <= 8'd3) 
+            align_sticky = 1'b0;
+        else if (shamt >= 8'd27) 
+            align_sticky = |ms;
+        else 
+            // Shift lost bits to the top of a 24-bit register and OR them
+            align_sticky = |(ms << (5'd27 - shamt[4:0])); 
+    end
+
+    // Apply the shift and OR the sticky bit into the LSB
+    wire [27:0] ms_alig = (shamt >= 8'd28) ? {27'h0, |ms} : ((ms_ext >> shamt) | {27'h0, align_sticky});
 
     // Add or subtract the magnitudes.
     wire        same_sign = (sl == ss);
@@ -99,8 +114,34 @@ module fp32_add (
         end
     end
 
-    // After normalisation : norm_m[26] is the implicit 1, norm_m[25:3] is the 23-bit fraction (truncate the 3 guard bits = round-to-zero).
-    wire [22:0] frac_norm = norm_m[25:3];
+    // After normalisation : norm_m[26] is the implicit 1.
+    // Kept fraction is [25:3] (23 bits).
+    // Discarded bits are [2] (Guard), [1] (Round), [0] (Sticky).
+    
+    wire G   = norm_m[2];
+    wire R   = norm_m[1];
+    wire S   = norm_m[0]; 
+    wire LSB = norm_m[3];
+    
+    // We can combine R and S into a single sticky state
+    wire round_up = G & (R | S | LSB);
+    
+    // Add the round bit. Pad with 01 to catch rounding overflow.
+    wire [24:0] rounded_frac_ext = {2'b01, norm_m[25:3]} + round_up;
+    
+    reg [22:0] frac_final;
+    reg [9:0]  exp_final;
+    
+    always @* begin
+        if (rounded_frac_ext[24]) begin 
+            // Overflow
+            frac_final = rounded_frac_ext[23:1];
+            exp_final  = norm_e + 10'd1;
+        end else begin
+            frac_final = rounded_frac_ext[22:0];
+            exp_final  = norm_e;
+        end
+    end
 
     // Result mux : handle specials and pack the normal result
     reg [31:0] result;
@@ -127,7 +168,7 @@ module fp32_add (
         end else if (norm_e == 10'h0) begin
             result = 32'h00000000;                              // underflow -> 0
         end else begin
-            result = {sl, norm_e[7:0], frac_norm};
+            result = {sl, exp_final[7:0], frac_final};
         end
     end
 
