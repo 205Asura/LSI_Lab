@@ -1,6 +1,6 @@
 #Define variables
-TESTNAME 	?= tb_spi_communication
-TB_NAME 	?= tb_SPI_Communication
+TESTNAME 	?= tb_cubic_solver
+TB_NAME 	?= tb_cubic_solver
 RADIX		?= hex
 MEALY_FSM   ?= 0
 SIM_DEBUG   ?= 1

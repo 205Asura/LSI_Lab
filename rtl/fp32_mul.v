@@ -3,7 +3,7 @@
 // Behaviour
 //   * Subnormal operands are flushed to zero before processing.
 //   * NaN propagates ; 0 * Inf = NaN ; Inf * x = signed Inf.
-//   * Round-to-zero on the result mantissa.
+//   * Round-to-nearest and ties-to-even on the result mantissa.
 `timescale 1ns/1ps
 
 module fp32_mul (
@@ -38,15 +38,51 @@ module fp32_mul (
 
     // Normalise : the product's MSB is bit[47] (when ma*mb >= 2.0) or
     // bit[46] (when 1.0 <= ma*mb < 2.0).
-    reg  [22:0] frac_n;
-    reg  [9:0]  exp_n;
+    reg [24:0] mantissa_rounded; // Extra bit to catch rounding overflow
+    reg [22:0] frac_n;
+    reg [9:0]  exp_n;
+    
+    reg G, R, S, round_up;
+
     always @* begin
         if (prod[47]) begin
-            frac_n = prod[46:24];      // truncate
-            exp_n  = exp_t + 10'd1;
+            // Case 1: Mantissa product >= 2.0 (Needs 1-bit right shift)
+            // Fraction is prod[46:24]. Discarded is prod[23:0].
+            G = prod[23];
+            S = |prod[22:0];
+            
+            // Round up if > 0.5 (G & S), OR if exactly 0.5 and the LSB (prod[24]) is 1 (Ties-to-Even, G & prod[24])
+            round_up = G & (S | prod[24]);
+            
+            // Add the round bit to the {hidden bit, fraction}. Padded to 25 bits to catch overflow.
+            mantissa_rounded = {2'b01, prod[46:24]} + round_up;
+            
+            // Check if rounding caused an overflow
+            if (mantissa_rounded[24]) begin
+                frac_n = mantissa_rounded[23:1];
+                exp_n  = exp_t + 10'd2; // Shifted twice (the >= 2.0 shift and the rounding overflow shift)
+            end else begin
+                frac_n = mantissa_rounded[22:0];
+                exp_n  = exp_t + 10'd1; // The >= 2.0 shift
+            end
+            
         end else begin
-            frac_n = prod[45:23];
-            exp_n  = exp_t;
+            // Case 2: Mantissa product < 2.0 (No shift needed)
+            // Fraction is prod[45:23]. Discarded is prod[22:0].
+            G = prod[22];
+            S = |prod[21:0];
+            
+            round_up = G & (S | prod[23]);
+            
+            mantissa_rounded = {2'b01, prod[45:23]} + round_up;
+            
+            if (mantissa_rounded[24]) begin
+                frac_n = mantissa_rounded[23:1];
+                exp_n  = exp_t + 10'd1; // Shifted for rounding overflow
+            end else begin
+                frac_n = mantissa_rounded[22:0];
+                exp_n  = exp_t;
+            end
         end
     end
 
