@@ -1,23 +1,3 @@
-// cubic_solver : solves   a*x^3 + b*x^2 + c*x + d = 0   
-// Interface
-//   start        :  pulse 1 cycle to launch a new solve
-//   a, b, c, d   :  coefficients.
-//   done         :  asserted for one cycle when x0/x1/x2 are valid.
-//   x0..x2       :  three roots, each as (real, imag) pair.
-//
-// Algorithm
-//   Normalise :  ba = b/a, ca = c/a, da = d/a.    (a == 0 -> all NaN.)
-//   Depress   :  x = t - ba/3   ->   t^3 + p*t + q = 0
-//                   p = ca - ba^2/3
-//                   q = (2*ba^3)/27 - (ba*ca)/3 + da
-//   Discriminant   D = q^2/4 + p^3/27
-//        D > 0  : Cardano  -> 1 real, 2 complex
-//        D < 0  : trig     -> 3 distinct real
-//        D = 0  : closed   -> double + simple real (or triple)
-//   Un-shift  : x_k = t_k - ba/3.
-//
-// Design module:
-//   Multi-cycle FSM with one shared instance of each unit. Each state drives the FP-unit input mux for one operation, then captures the combinational result into a register at the next clock edge.  
 `timescale 1ns/1ps
 
 module cubic_solver (
@@ -36,7 +16,7 @@ module cubic_solver (
     output reg  [31:0] x2_re,
     output reg  [31:0] x2_im
 );
-    //  FP32 constants ( AI gen :)))) ) 
+    //  FP32 constants 
     localparam [31:0] FP_ZERO     = 32'h00000000;
     localparam [31:0] FP_QNAN     = 32'h7FC00000;
     localparam [31:0] FP_HALF     = 32'h3F000000;   // 0.5
@@ -115,6 +95,16 @@ module cubic_solver (
         ST_NAN_OUT    = 6'd57;
 
     reg [5:0]  state;
+    reg [6:0]  wait_cnt;                      
+    
+    // Pipeline latency trackers
+    wire       add_done  = (wait_cnt == 7'd4);  
+    wire       mul_done  = (wait_cnt == 7'd4);  
+    wire       cbrt_done = (wait_cnt == 7'd28); 
+    wire       div_done  = (wait_cnt == 7'd49); 
+    wire       cos_done  = (wait_cnt == 7'd40); 
+    wire       sqrt_done = (wait_cnt == 7'd28); // UPDATED: Sqrt requires 28 clk delays
+    wire       acos_done = (wait_cnt == 7'd68); 
 
     //  coefficients 
     reg [31:0] a_r, b_r, c_r, d_r;
@@ -154,13 +144,65 @@ module cubic_solver (
 
     wire [31:0] mul_y, div_y, add_y, sqrt_y, cbrt_y, cos_y, acos_y;
 
-    fp32_mul  U_MUL  (.a(mul_a),   .b(mul_b),   .y(mul_y));
-    fp32_div  U_DIV  (.a(div_a),   .b(div_b),   .y(div_y));
-    fp32_add  U_ADD  (.a(add_a),   .b(add_b),   .sub(add_sub), .y(add_y));
-    fp32_sqrt U_SQRT (.a(sqrt_in), .y(sqrt_y));
-    fp32_cbrt U_CBRT (.a(cbrt_in), .y(cbrt_y));
-    fp32_cos  U_COS  (.a(cos_in),  .y(cos_y));
-    fp32_acos U_ACOS (.a(acos_in), .y(acos_y));
+    // Pipelined CBRT
+    fp32_cbrt U_CBRT (
+        .clk(clk),
+        .en(1'b1),
+        .a(cbrt_in),
+        .y(cbrt_y)
+    );
+    
+    // Pipelined ACOS
+    fp32_acos U_ACOS (
+        .clk(clk),
+        .en(1'b1),
+        .a(acos_in),
+        .y(acos_y)
+    );
+
+    // Pipelined Sqrt
+    fp32_sqrt U_SQRT (
+        .clk(clk),
+        .en(1'b1),
+        .a(sqrt_in),
+        .y(sqrt_y)
+    );
+
+    // Pipelined Cosine
+    fp32_cos U_COS (
+        .clk(clk),
+        .en(1'b1),
+        .a(cos_in),  
+        .y(cos_y)
+    );
+
+    // Pipelined Multiplier
+    fp32_mul U_MUL (
+        .clk(clk),
+        .en(1'b1),
+        .a(mul_a),
+        .b(mul_b),
+        .y(mul_y)
+    );
+
+    // Pipelined Division
+    fp32_div U_DIV (
+        .clk(clk),
+        .en(1'b1), 
+        .a(div_a),
+        .b(div_b),
+        .y(div_y)
+    );
+
+    // Pipelined Adder
+    fp32_add U_ADD (
+        .clk(clk),
+        .en(1'b1),
+        .a(add_a),
+        .b(add_b),
+        .sub(add_sub),
+        .y(add_y)
+    );
 
     // Branch decoding (combinational on D_v) 
     wire D_zero = (D_v[30:0] == 31'b0);
@@ -169,7 +211,6 @@ module cubic_solver (
     // a == 0 detection
     wire a_is_zero = (a_r[30:23] == 8'h00);
     wire a_is_specials = (a_r[30:23] == 8'hFF);
-
 
     // Datapath input mux : drive FP units based on current state
     always @* begin
@@ -213,12 +254,12 @@ module cubic_solver (
             //  (D > 0) 
             ST_C_SQRTD:  begin sqrt_in = D_v;                                end
             ST_C_QH:     begin mul_a   = q_v;   mul_b = FP_HALF;             end
-            ST_C_AARG:   begin add_a   = sqrtD; add_b = qh; add_sub = 1'b1;  end // sqrtD - q/2
-            ST_C_BARG:   begin add_a   = sqrtD; add_b = qh; add_sub = 1'b0;  end // sqrtD + q/2 (then negated on store)
+            ST_C_AARG:   begin add_a   = sqrtD; add_b = qh; add_sub = 1'b1;  end 
+            ST_C_BARG:   begin add_a   = sqrtD; add_b = qh; add_sub = 1'b0;  end 
             ST_C_U:      begin cbrt_in = A_arg;                              end
             ST_C_V:      begin cbrt_in = B_arg;                              end
             ST_C_UV:     begin add_a   = u_v;   add_b = v_v; add_sub = 1'b0; end
-            ST_C_HUV:    begin mul_a   = root0_re; mul_b = FP_HALF;          end // (u+v)/2
+            ST_C_HUV:    begin mul_a   = root0_re; mul_b = FP_HALF;          end 
             ST_C_UMV:    begin add_a   = u_v;   add_b = v_v; add_sub = 1'b1; end
             ST_C_IMAG:   begin mul_a   = u_minus_v; mul_b = FP_SQRT3_2;      end
 
@@ -260,6 +301,7 @@ module cubic_solver (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state    <= ST_IDLE;
+            wait_cnt <= 7'd0;
             done     <= 1'b0;
             x0_re <= FP_ZERO; x0_im <= FP_ZERO;
             x1_re <= FP_ZERO; x1_im <= FP_ZERO;
@@ -291,6 +333,7 @@ module cubic_solver (
 
             case (state)
                 ST_IDLE: begin
+                    wait_cnt <= 7'd0;
                     if (start) begin
                         a_r   <= a;
                         b_r   <= b;
@@ -305,32 +348,32 @@ module cubic_solver (
                     else                            state <= ST_BA;
                 end
 
-                //  Normalization 
-                ST_BA: begin ba <= div_y; state <= ST_CA; end
-                ST_CA: begin ca <= div_y; state <= ST_DA; end
-                ST_DA: begin da <= div_y; state <= ST_BA2; end
+                //  Normalization (DIVIDER -> 61 waits) 
+                ST_BA: begin if (div_done) begin ba <= div_y; state <= ST_CA; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_CA: begin if (div_done) begin ca <= div_y; state <= ST_DA; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_DA: begin if (div_done) begin da <= div_y; state <= ST_BA2; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
 
-                //  Powers and products of normalised coeffs 
-                ST_BA2:      begin ba2      <= mul_y; state <= ST_BA3;        end
-                ST_BA3:      begin ba3      <= mul_y; state <= ST_BACA;       end
-                ST_BACA:     begin ba_ca    <= mul_y; state <= ST_BA_D3;      end
-                ST_BA_D3:    begin shift_v  <= mul_y; state <= ST_BA2_D3;     end
-                ST_BA2_D3:   begin ba2_d3   <= mul_y; state <= ST_BA3_2_27;   end
-                ST_BA3_2_27: begin ba3_2_27 <= mul_y; state <= ST_BACA_D3;    end
-                ST_BACA_D3:  begin ba_ca_d3 <= mul_y; state <= ST_P;          end
+                //  Powers and products of normalised coeffs (MULTIPLIER -> 4 waits)
+                ST_BA2:      begin if (mul_done) begin ba2      <= mul_y; state <= ST_BA3;      wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_BA3:      begin if (mul_done) begin ba3      <= mul_y; state <= ST_BACA;     wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_BACA:     begin if (mul_done) begin ba_ca    <= mul_y; state <= ST_BA_D3;    wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_BA_D3:    begin if (mul_done) begin shift_v  <= mul_y; state <= ST_BA2_D3;   wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_BA2_D3:   begin if (mul_done) begin ba2_d3   <= mul_y; state <= ST_BA3_2_27; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_BA3_2_27: begin if (mul_done) begin ba3_2_27 <= mul_y; state <= ST_BACA_D3;  wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_BACA_D3:  begin if (mul_done) begin ba_ca_d3 <= mul_y; state <= ST_P;        wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
 
-                //  p, q 
-                ST_P:     begin p_v <= add_y; state <= ST_QPART; end
-                ST_QPART: begin q_v <= add_y; state <= ST_Q;     end
-                ST_Q:     begin q_v <= add_y; state <= ST_P2;    end
+                //  p, q (ADDER -> 4 waits)
+                ST_P:     begin if (add_done) begin p_v <= add_y; state <= ST_QPART; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_QPART: begin if (add_done) begin q_v <= add_y; state <= ST_Q;     wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_Q:     begin if (add_done) begin q_v <= add_y; state <= ST_P2;    wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
 
-                //  Discriminant
-                ST_P2:      begin p2_v   <= mul_y; state <= ST_P3;       end
-                ST_P3:      begin p3_v   <= mul_y; state <= ST_QSQ;      end
-                ST_QSQ:     begin qsq    <= mul_y; state <= ST_P3_D27;   end
-                ST_P3_D27:  begin p3_d27 <= mul_y; state <= ST_QSQ_D4;   end
-                ST_QSQ_D4:  begin qsq_d4 <= mul_y; state <= ST_D_COMP;   end
-                ST_D_COMP:  begin D_v    <= add_y; state <= ST_BRANCH;   end
+                //  Discriminant (MULTIPLIER -> 4 waits)
+                ST_P2:      begin if (mul_done) begin p2_v   <= mul_y; state <= ST_P3;     wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_P3:      begin if (mul_done) begin p3_v   <= mul_y; state <= ST_QSQ;    wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_QSQ:     begin if (mul_done) begin qsq    <= mul_y; state <= ST_P3_D27; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_P3_D27:  begin if (mul_done) begin p3_d27 <= mul_y; state <= ST_QSQ_D4; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_QSQ_D4:  begin if (mul_done) begin qsq_d4 <= mul_y; state <= ST_D_COMP; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_D_COMP:  begin if (add_done) begin D_v    <= add_y; state <= ST_BRANCH; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
 
                 // Branch on sign of D 
                 ST_BRANCH: begin
@@ -340,27 +383,35 @@ module cubic_solver (
                 end
 
                 //   (D > 0  -> 1 real + 2 complex)
-                ST_C_SQRTD: begin sqrtD <= sqrt_y; state <= ST_C_QH;   end
-                ST_C_QH:    begin qh    <= mul_y;  state <= ST_C_AARG;end
-                ST_C_AARG:  begin A_arg <= add_y;  state <= ST_C_BARG;end
-                // B_arg = -(sqrtD + q/2)  
-                ST_C_BARG:  begin B_arg <= {~add_y[31], add_y[30:0]};
-                                  state <= ST_C_U;                    end
-                ST_C_U:     begin u_v   <= cbrt_y; state <= ST_C_V;   end
-                ST_C_V:     begin v_v   <= cbrt_y; state <= ST_C_UV;  end
-                ST_C_UV: begin
-                    // Real root  t0 = u + v
-                    root0_re <= add_y;
-                    root0_im <= FP_ZERO;
-                    state    <= ST_C_HUV;
+                ST_C_SQRTD: begin if (sqrt_done) begin sqrtD <= sqrt_y; state <= ST_C_QH; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_C_QH:    begin if (mul_done) begin qh <= mul_y; state <= ST_C_AARG; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                
+                ST_C_AARG:  begin if (add_done) begin A_arg <= add_y; state <= ST_C_BARG; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_C_BARG:  begin if (add_done) begin B_arg <= {~add_y[31], add_y[30:0]}; state <= ST_C_U; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                
+                // Pipelined CBRT -> 28 waits
+                ST_C_U:     begin if (cbrt_done) begin u_v <= cbrt_y; state <= ST_C_V; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_C_V:     begin if (cbrt_done) begin v_v <= cbrt_y; state <= ST_C_UV; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                
+                ST_C_UV: begin 
+                    if (add_done) begin 
+                        root0_re <= add_y; 
+                        root0_im <= FP_ZERO; 
+                        state <= ST_C_HUV; 
+                        wait_cnt <= 7'd0; 
+                    end else wait_cnt <= wait_cnt + 1; 
                 end
-                // complex_re = -(u+v)/2  
-                ST_C_HUV: begin
-                    complex_re <= {~mul_y[31], mul_y[30:0]};
-                    state      <= ST_C_UMV;
+                
+                ST_C_HUV: begin 
+                    if (mul_done) begin 
+                        complex_re <= {~mul_y[31], mul_y[30:0]}; 
+                        state <= ST_C_UMV; 
+                        wait_cnt <= 7'd0; 
+                    end else wait_cnt <= wait_cnt + 1; 
                 end
-                ST_C_UMV:  begin u_minus_v <= add_y; state <= ST_C_IMAG; end
-                ST_C_IMAG: begin imag_v    <= mul_y; state <= ST_C_PACK; end
+                
+                ST_C_UMV:  begin if (add_done) begin u_minus_v <= add_y; state <= ST_C_IMAG; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_C_IMAG: begin if (mul_done) begin imag_v    <= mul_y; state <= ST_C_PACK; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
                 ST_C_PACK: begin
                     root1_re <= complex_re;
                     root1_im <= imag_v;
@@ -370,39 +421,53 @@ module cubic_solver (
                 end
 
                 //  (D < 0  -> 3  real)
-                ST_T_NEGP3:   begin negp3      <= mul_y;  state <= ST_T_SQRTNP3; end
-                ST_T_SQRTNP3: begin sqrt_negp3 <= sqrt_y; state <= ST_T_M;       end
-                ST_T_M:       begin m_v        <= mul_y;  state <= ST_T_PM;     end
-                ST_T_PM:      begin pm_v       <= mul_y;  state <= ST_T_3Q;     end
-                ST_T_3Q:      begin three_q    <= mul_y;  state <= ST_T_ARG;    end
-                ST_T_ARG:     begin theta_arg  <= div_y;  state <= ST_T_THETA;  end
-                ST_T_THETA:   begin theta_v    <= acos_y; state <= ST_T_THETA3; end
-                ST_T_THETA3:  begin theta3     <= mul_y;  state <= ST_T_COS0;   end
-                ST_T_COS0:    begin cos0_v     <= cos_y;  state <= ST_T_T0;     end
-                ST_T_T0: begin
-                    root0_re <= mul_y;
-                    root0_im <= FP_ZERO;
-                    state    <= ST_T_ARG1;
+                ST_T_NEGP3:   begin if (mul_done) begin negp3 <= mul_y; state <= ST_T_SQRTNP3; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_SQRTNP3: begin if (sqrt_done) begin sqrt_negp3 <= sqrt_y; state <= ST_T_M; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_M:       begin if (mul_done) begin m_v   <= mul_y; state <= ST_T_PM;      wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_PM:      begin if (mul_done) begin pm_v  <= mul_y; state <= ST_T_3Q;      wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_3Q:      begin if (mul_done) begin three_q <= mul_y; state <= ST_T_ARG;   wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                
+                ST_T_ARG:     begin if (div_done) begin theta_arg <= div_y; state <= ST_T_THETA; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                
+                ST_T_THETA:   begin if (acos_done) begin theta_v <= acos_y; state <= ST_T_THETA3; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_THETA3:  begin if (mul_done) begin theta3 <= mul_y; state <= ST_T_COS0; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                
+                ST_T_COS0:    begin if (cos_done) begin cos0_v     <= cos_y;  state <= ST_T_T0;      wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_T0: begin 
+                    if (mul_done) begin 
+                        root0_re <= mul_y; 
+                        root0_im <= FP_ZERO; 
+                        state <= ST_T_ARG1; 
+                        wait_cnt <= 7'd0; 
+                    end else wait_cnt <= wait_cnt + 1; 
                 end
-                ST_T_ARG1:    begin arg1_v     <= add_y;  state <= ST_T_COS1;   end
-                ST_T_COS1:    begin cos1_v     <= cos_y;  state <= ST_T_T1;     end
-                ST_T_T1: begin
-                    root1_re <= mul_y;
-                    root1_im <= FP_ZERO;
-                    state    <= ST_T_ARG2;
+                
+                ST_T_ARG1:    begin if (add_done) begin arg1_v <= add_y; state <= ST_T_COS1; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_COS1:    begin if (cos_done) begin cos1_v     <= cos_y;  state <= ST_T_T1;      wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_T1: begin 
+                    if (mul_done) begin 
+                        root1_re <= mul_y; 
+                        root1_im <= FP_ZERO; 
+                        state <= ST_T_ARG2; 
+                        wait_cnt <= 7'd0; 
+                    end else wait_cnt <= wait_cnt + 1; 
                 end
-                ST_T_ARG2:    begin arg2_v     <= add_y;  state <= ST_T_COS2;   end
-                ST_T_COS2:    begin cos2_v     <= cos_y;  state <= ST_T_T2;     end
-                ST_T_T2: begin
-                    root2_re <= mul_y;
-                    root2_im <= FP_ZERO;
-                    state    <= ST_UNSHIFT0;
+                
+                ST_T_ARG2:    begin if (add_done) begin arg2_v <= add_y; state <= ST_T_COS2; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_COS2:    begin if (cos_done) begin cos2_v     <= cos_y;  state <= ST_T_T2;      wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_T_T2: begin 
+                    if (mul_done) begin 
+                        root2_re <= mul_y; 
+                        root2_im <= FP_ZERO; 
+                        state <= ST_UNSHIFT0; 
+                        wait_cnt <= 7'd0; 
+                    end else wait_cnt <= wait_cnt + 1; 
                 end
 
                 // D = 0  (multiple roots)
-                ST_Z_NQH:    begin nqh         <= mul_y;  state <= ST_Z_R;     end
-                ST_Z_R:      begin r_z         <= cbrt_y; state <= ST_Z_SIMPLE;end
-                ST_Z_SIMPLE: begin simple_root <= mul_y;  state <= ST_Z_PACK;  end
+                ST_Z_NQH:    begin if (mul_done) begin nqh         <= mul_y; state <= ST_Z_R;      wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_Z_R:      begin if (cbrt_done) begin r_z <= cbrt_y; state <= ST_Z_SIMPLE; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_Z_SIMPLE: begin if (mul_done) begin simple_root <= mul_y; state <= ST_Z_PACK;   wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
                 ST_Z_PACK: begin
                     // simple = 2*r,  double = -r
                     root0_re <= simple_root;
@@ -415,21 +480,9 @@ module cubic_solver (
                 end
 
                 // Un-shift :  x_k = root_k - shift  (= root_k - ba/3)
-                ST_UNSHIFT0: begin
-                    x0_re <= add_y;
-                    x0_im <= root0_im;
-                    state <= ST_UNSHIFT1;
-                end
-                ST_UNSHIFT1: begin
-                    x1_re <= add_y;
-                    x1_im <= root1_im;
-                    state <= ST_UNSHIFT2;
-                end
-                ST_UNSHIFT2: begin
-                    x2_re <= add_y;
-                    x2_im <= root2_im;
-                    state <= ST_DONE;
-                end
+                ST_UNSHIFT0: begin if (add_done) begin x0_re <= add_y; x0_im <= root0_im; state <= ST_UNSHIFT1; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_UNSHIFT1: begin if (add_done) begin x1_re <= add_y; x1_im <= root1_im; state <= ST_UNSHIFT2; wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
+                ST_UNSHIFT2: begin if (add_done) begin x2_re <= add_y; x2_im <= root2_im; state <= ST_DONE;     wait_cnt <= 7'd0; end else wait_cnt <= wait_cnt + 1; end
 
                 ST_DONE: begin
                     done  <= 1'b1;

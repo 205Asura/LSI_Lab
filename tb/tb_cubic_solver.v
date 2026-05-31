@@ -2,7 +2,7 @@
 //
 //  Coverage:
 //    1. Basic arithmetics: fp32_add / sub / mul / div
-//    2. Complex functions: fp32_sqrt / cbrt / cos / acos
+//    2. Complex functions: fp32_sqrt / cbrt / cos / acos / exp2 / log2
 //    3. Many cubic equation cases:  all three discriminant branches, triple / double roots, large & smallmagnitudes, negative & fractional a,and the degenerate a == 0 case.
 
 //
@@ -27,20 +27,23 @@ module tb_cubic_solver;
     initial clk = 1'b0;
     always #5 clk = ~clk;
 
-    reg  [31:0] ua, ub;          // operands for binary units
-    reg  [31:0] ux;              // operand for unary units
+    reg  [31:0] ua, ub;          
+    reg  [31:0] ux;              
     wire [31:0] r_add, r_sub, r_mul, r_div;
-    wire [31:0] r_sqrt, r_cbrt, r_cos, r_acos;
+    wire [31:0] r_sqrt, r_cbrt, r_cos, r_acos, r_exp2, r_log2;
 
-    fp32_add  T_ADD  (.a(ua), .b(ub), .sub(1'b0), .y(r_add));
-    fp32_add  T_SUB  (.a(ua), .b(ub), .sub(1'b1), .y(r_sub));
-    fp32_mul  T_MUL  (.a(ua), .b(ub),             .y(r_mul));
-    fp32_div  T_DIV  (.a(ua), .b(ub),             .y(r_div));
-    fp32_sqrt T_SQRT (.a(ux),                     .y(r_sqrt));
-    fp32_cbrt T_CBRT (.a(ux),                     .y(r_cbrt));
-    fp32_cos  T_COS  (.a(ux),                     .y(r_cos));
-    fp32_acos T_ACOS (.a(ux),                     .y(r_acos));
-
+    // --- PIPELINED INSTANTIATIONS ---
+    fp32_add           T_ADD  (.clk(clk), .en(1'b1), .a(ua), .b(ub), .sub(1'b0), .y(r_add));
+    fp32_add           T_SUB  (.clk(clk), .en(1'b1), .a(ua), .b(ub), .sub(1'b1), .y(r_sub));
+    fp32_mul           T_MUL  (.clk(clk), .en(1'b1), .a(ua), .b(ub),             .y(r_mul));
+    fp32_div           T_DIV  (.clk(clk), .en(1'b1), .a(ua), .b(ub),             .y(r_div));
+    fp32_exp2          T_EXP2 (.clk(clk), .en(1'b1), .x(ux),                     .y(r_exp2));
+    fp32_cos           T_COS  (.clk(clk), .en(1'b1), .a(ux),                     .y(r_cos));
+    fp32_log2          T_LOG2 (.clk(clk), .en(1'b1), .a(ux),                     .y(r_log2));
+    fp32_sqrt          T_SQRT (.clk(clk), .en(1'b1), .a(ux),                     .y(r_sqrt));
+    fp32_acos          T_ACOS (.clk(clk), .en(1'b1), .a(ux),                     .y(r_acos));
+    fp32_cbrt          T_CBRT (.clk(clk), .en(1'b1), .a(ux),                     .y(r_cbrt));
+    
     integer n_pass = 0;
     integer n_fail = 0;
 
@@ -50,8 +53,8 @@ module tb_cubic_solver;
         real frac, m, sgn, scale;
         begin
             sgn = f[31] ? -1.0 : 1.0;
-            if (f[30:23] == 8'h00)      fp2r = 0.0;                 // zero / subnormal
-            else if (f[30:23] == 8'hFF) fp2r = sgn * 1.0e30;        // Inf/NaN sentinel
+            if (f[30:23] == 8'h00)      fp2r = 0.0;                 
+            else if (f[30:23] == 8'hFF) fp2r = sgn * 1.0e30;        
             else begin
                 e = $signed({1'b0, f[30:23]}) - 127;
                 frac = 0.0;
@@ -86,9 +89,16 @@ module tb_cubic_solver;
             er  = fp2r(exp);
             err = rabs(gr - er);
             tol = atol + rtol * rabs(er);
-            if (is_qnan(got)) begin
+            
+            if (is_qnan(got) && is_qnan(exp)) begin
+                n_pass = n_pass + 1;
+                $display("  PASS %-0s : NaN (expected NaN)", name);
+            end else if (is_qnan(got)) begin
                 n_fail = n_fail + 1;
                 $display("  FAIL %-0s : got NaN, expected %0.6f", name, er);
+            end else if (is_qnan(exp)) begin
+                n_fail = n_fail + 1;
+                $display("  FAIL %-0s : got %0.6f, expected NaN", name, gr);
             end else if (err <= tol) begin
                 n_pass = n_pass + 1;
                 $display("  PASS %-0s : %0.6f  (exp %0.6f, err %0.2e)", name, gr, er, err);
@@ -100,18 +110,19 @@ module tb_cubic_solver;
         end
     endtask
 
-    task check_add; input [31:0] x,y,e; begin ua=x; ub=y; #1; expect_val("add ",r_add,e,1e-4,1e-4); end endtask
-    task check_sub; input [31:0] x,y,e; begin ua=x; ub=y; #1; expect_val("sub ",r_sub,e,1e-4,1e-4); end endtask
-    task check_mul; input [31:0] x,y,e; begin ua=x; ub=y; #1; expect_val("mul ",r_mul,e,1e-4,1e-4); end endtask
-    task check_div; input [31:0] x,y,e; begin ua=x; ub=y; #1; expect_val("div ",r_div,e,1e-4,2e-4); end endtask
-    task check_sqrt;input [31:0] x,e;   begin ux=x;      #1; expect_val("sqrt",r_sqrt,e,1e-4,1e-3); end endtask
-    task check_cbrt;input [31:0] x,e;   begin ux=x;      #1; expect_val("cbrt",r_cbrt,e,1e-4,1e-3); end endtask
-    task check_cos; input [31:0] x,e;   begin ux=x;      #1; expect_val("cos ",r_cos,e,3e-3,0.0);   end endtask
-    task check_acos;input [31:0] x,e;   begin ux=x;      #1; expect_val("acos",r_acos,e,6e-3,0.0);  end endtask
+    // --- PIPELINED CHECK TASKS ---
+    task check_add; input [31:0] x,y,e; begin @(negedge clk); ua=x; ub=y; repeat (4) @(posedge clk); #1; expect_val("add ",r_add,e,1e-4,1e-4); end endtask
+    task check_sub; input [31:0] x,y,e; begin @(negedge clk); ua=x; ub=y; repeat (4) @(posedge clk); #1; expect_val("sub ",r_sub,e,1e-4,1e-4); end endtask
+    task check_mul; input [31:0] x,y,e; begin @(negedge clk); ua=x; ub=y; repeat (4) @(posedge clk); #1; expect_val("mul ",r_mul,e,1e-4,1e-4); end endtask
+    task check_div; input [31:0] x,y,e; begin @(negedge clk); ua=x; ub=y; repeat (49) @(posedge clk); #1; expect_val("div ",r_div,e,1e-4,2e-4); end endtask
+    task check_exp2; input [31:0] x,e; begin @(negedge clk); ux=x; repeat (82) @(posedge clk); #1; expect_val("exp2",r_exp2,e,1e-4,1e-3); end endtask
+    task check_cos; input [31:0] x,e; begin @(negedge clk); ux=x; repeat (40) @(posedge clk); #1; expect_val("cos ",r_cos,e,3e-3,0.0); end endtask
+    task check_log2; input [31:0] x,e; begin @(negedge clk); ux=x; repeat (81) @(posedge clk); #1; expect_val("log2",r_log2,e,1e-4,1e-3); end endtask
+    task check_sqrt; input [31:0] x,e; begin @(negedge clk); ux=x; repeat (28) @(posedge clk); #1; expect_val("sqrt",r_sqrt,e,1e-4,1e-3); end endtask // UPDATED to 28
+    task check_acos; input [31:0] x,e; begin @(negedge clk); ux=x; repeat (68) @(posedge clk); #1; expect_val("acos",r_acos,e,6e-3,0.0); end endtask
+    task check_cbrt; input [31:0] x,e; begin @(negedge clk); ux=x; repeat (28) @(posedge clk); #1; expect_val("cbrt",r_cbrt,e,1e-4,1e-3); end endtask
 
     // run one cubic + check
-    // matches the three (re,im) outputs against three expected roots,
-    // order-independent, within abs 2e-2 + rel 2e-2.
     reg  [31:0] gre [0:2];
     reg  [31:0] gim [0:2];
     reg  [31:0] ere [0:2];
@@ -179,14 +190,13 @@ module tb_cubic_solver;
                 n_fail=n_fail+1;
                 $display("  FAIL  %0s", label);
             end
-            $display("        x0=%0.5f%+0.5fi  x1=%0.5f%+0.5fi  x2=%0.5f%+0.5fi",
+            $display("        x0=%0.5f+%0.5fi  x1=%0.5f+%0.5fi  x2=%0.5f+%0.5fi",
                      fp2r(x0_re),fp2r(x0_im),fp2r(x1_re),fp2r(x1_im),fp2r(x2_re),fp2r(x2_im));
             repeat (2) @(posedge clk);
             end
         end
     endtask
 
-    // a == 0 : expect six NaNs
     task run_cubic_nan;
         input [600:0] label;
         input [31:0] aa,bb,cc,dd;
@@ -208,7 +218,6 @@ module tb_cubic_solver;
         end
     endtask
 
-    // MAIN TEST SEQUENCE
     initial begin
         $dumpfile("cubic_solver.vcd");
         $dumpvars(0, tb_cubic_solver);
@@ -250,8 +259,25 @@ module tb_cubic_solver;
         check_div(32'h3F800000,32'h40E00000,32'h3E124925);
         check_div(32'h42C80000,32'h40800000,32'h41C80000);
         check_div(32'h40A00000,32'h3F000000,32'h41200000);
-
+        
         $display("\n 2. FP32 COMPLEX FUNCTIONS ");
+        $display("-- exp2 --");
+        check_exp2(32'h00000000, 32'h3F800000); // 2^0 = 1.0
+        check_exp2(32'h3F800000, 32'h40000000); // 2^1 = 2.0
+        check_exp2(32'h40000000, 32'h40800000); // 2^2 = 4.0
+        check_exp2(32'hC0000000, 32'h3E800000); // 2^-2 = 0.25
+        
+        $display("-- log2 --");
+        check_log2(32'h3F800000, 32'h00000000); // log2(1.0)  = 0.0
+        check_log2(32'h40000000, 32'h3F800000); // log2(2.0)  = 1.0
+        check_log2(32'h40800000, 32'h40000000); // log2(4.0)  = 2.0
+        check_log2(32'h3F000000, 32'hBF800000); // log2(0.5)  = -1.0
+        check_log2(32'h3E800000, 32'hC0000000); // log2(0.25) = -2.0
+        check_log2(32'h40400000, 32'h3FCAD5B5); // log2(3.0)  ~ 1.58496
+        check_log2(32'h41200000, 32'h40549A78); // log2(10.0) ~ 3.32192
+        check_log2(32'h00000000, 32'hFF800000); // log2(0.0)  = -Inf
+        check_log2(32'hC0000000, 32'h7FC00000); // log2(-2.0) = NaN
+        
         $display("-- square root --");
         check_sqrt(32'h40800000,32'h40000000);
         check_sqrt(32'h40000000,32'h3FB504F3);
@@ -353,9 +379,4 @@ module tb_cubic_solver;
     // hard watchdog
     initial begin #500000; $display("*** SIM WATCHDOG TIMEOUT ***"); $finish; end
 
-    initial begin
-        $recordfile ("waves")
-        $recordvars ("depth=0", tb_cubic_solver)
-        
-    end 
 endmodule

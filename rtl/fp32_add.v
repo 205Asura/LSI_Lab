@@ -1,176 +1,234 @@
-// fp32_add : single-precision adder/subtractor (combinational)
-//
-//   y = a + b  when sub == 1'b0
-//   y = a - b  when sub == 1'b1
-//
-// Behaviour: 
-//   * Subnormal operands are flushed to zero before processing.
-//   * NaN propagates : (NaN op x) = NaN.
-//   * Inf  - Inf     = NaN ; Inf + Inf (same sign) = Inf.
-//   * Round-to-zero (truncation) on the result mantissa.  The cubic solver tolerates the resulting ~1 ulp bias on each elementary op.
-
 `timescale 1ns/1ps
 
 module fp32_add (
+    input  wire        clk,
+    input  wire        en,       // Pipeline enable/stall
     input  wire [31:0] a,
     input  wire [31:0] b,
     input  wire        sub,
     output wire [31:0] y
 );
-    // Flip the sign of b for subtraction
-    wire [31:0] b_eff = sub ? {~b[31], b[30:0]} : b;
 
-    // Unpack
-    wire        sa = a[31];
-    wire [7:0]  ea = a[30:23];
-    wire [22:0] fa = a[22:0];
-    wire        sb = b_eff[31];
-    wire [7:0]  eb = b_eff[30:23];
-    wire [22:0] fb = b_eff[22:0];
-
-    // Special case detection
-    wire a_nan  = (ea == 8'hFF) && (fa != 23'h0);
-    wire b_nan  = (eb == 8'hFF) && (fb != 23'h0);
-    wire a_inf  = (ea == 8'hFF) && (fa == 23'h0);
-    wire b_inf  = (eb == 8'hFF) && (fb == 23'h0);
-    wire a_zero = (ea == 8'h00);                       // flush subnormals
-    wire b_zero = (eb == 8'h00);
-
-    // 24-bit mantissas with hidden bit
-    wire [23:0] ma = a_zero ? 24'h0 : {1'b1, fa};
-    wire [23:0] mb = b_zero ? 24'h0 : {1'b1, fb};
-
-    // Order operands so that the larger magnitude is "l" and the smaller "s"
-    wire a_ge = (ea > eb) || ((ea == eb) && (ma >= mb));
-    wire [7:0]  el = a_ge ? ea : eb;
-    wire [7:0]  es = a_ge ? eb : ea;
-    wire [23:0] ml = a_ge ? ma : mb;
-    wire [23:0] ms = a_ge ? mb : ma;
-    wire        sl = a_ge ? sa : sb;
-    wire        ss = a_ge ? sb : sa;
-
-    // Align : right-shift the smaller mantissa by the exponent difference.
-    // Bit layout (28 bits) : [27]=carry, [26]=hidden 1, [25:3]=fraction, [2:0]=guard, round, sticky
-    wire [7:0]  shamt   = el - es;
-    wire [27:0] ml_ext  = {1'b0, ml, 3'b000};
-    wire [27:0] ms_ext  = {1'b0, ms, 3'b000};
+    // Stage 1 : Unpack, Special Cases, & Magnitude Comparison
     
-    // Check if any 1s are lost when shifting ms_ext to the right.
-    // Since ms is padded with 3 zeros, bits are only lost if shamt > 3.
-    reg align_sticky;
-    always @* begin
-        if (shamt <= 8'd3) 
-            align_sticky = 1'b0;
-        else if (shamt >= 8'd27) 
-            align_sticky = |ms;
-        else 
-            // Shift lost bits to the top of a 24-bit register and OR them
-            align_sticky = |(ms << (5'd27 - shamt[4:0])); 
+    // Comb logic for Stage 1
+    wire [31:0] b_eff_w = sub ? {~b[31], b[30:0]} : b;
+    wire        sa_w    = a[31];
+    wire [7:0]  ea_w    = a[30:23];
+    wire [22:0] fa_w    = a[22:0];
+    wire        sb_w    = b_eff_w[31];
+    wire [7:0]  eb_w    = b_eff_w[30:23];
+    wire [22:0] fb_w    = b_eff_w[22:0];
+
+    wire a_nan_w  = (ea_w == 8'hFF) && (fa_w != 23'h0);
+    wire b_nan_w  = (eb_w == 8'hFF) && (fb_w != 23'h0);
+    wire a_inf_w  = (ea_w == 8'hFF) && (fa_w == 23'h0);
+    wire b_inf_w  = (eb_w == 8'hFF) && (fb_w == 23'h0);
+    wire a_zero_w = (ea_w == 8'h00); 
+    wire b_zero_w = (eb_w == 8'h00);
+
+    wire [23:0] ma_w = a_zero_w ? 24'h0 : {1'b1, fa_w};
+    wire [23:0] mb_w = b_zero_w ? 24'h0 : {1'b1, fb_w};
+
+    wire a_ge_w       = (ea_w > eb_w) || ((ea_w == eb_w) && (ma_w >= mb_w));
+    wire [7:0]  el_w  = a_ge_w ? ea_w : eb_w;
+    wire [7:0]  es_w  = a_ge_w ? eb_w : ea_w;
+    wire [23:0] ml_w  = a_ge_w ? ma_w : mb_w;
+    wire [23:0] ms_w  = a_ge_w ? mb_w : ma_w;
+    wire        sl_w  = a_ge_w ? sa_w : sb_w;
+    wire        ss_w  = a_ge_w ? sb_w : sa_w;
+    
+    // Stage 1 Pipeline Registers
+    reg [7:0]  s1_shamt;
+    reg [27:0] s1_ml_ext;
+    reg [23:0] s1_ms;
+    reg        s1_same_sign;
+    reg        s1_sl;
+    reg [7:0]  s1_el;
+    reg [7:0]  s1_flags;     // packed: {a_nan, b_nan, a_inf, b_inf, a_zero, b_zero, sa, sb}
+    reg [31:0] s1_a, s1_b_eff;
+
+    always @(posedge clk) begin
+        if (en) begin
+            s1_shamt     <= el_w - es_w;
+            s1_ml_ext    <= {1'b0, ml_w, 3'b000};
+            s1_ms        <= ms_w;
+            s1_same_sign <= (sl_w == ss_w);
+            s1_sl        <= sl_w;
+            s1_el        <= el_w;
+            s1_flags     <= {a_nan_w, b_nan_w, a_inf_w, b_inf_w, a_zero_w, b_zero_w, sa_w, sb_w};
+            s1_a         <= a;
+            s1_b_eff     <= b_eff_w;
+        end
     end
 
-    // Apply the shift and OR the sticky bit into the LSB
-    wire [27:0] ms_alig = (shamt >= 8'd28) ? {27'h0, |ms} : ((ms_ext >> shamt) | {27'h0, align_sticky});
+  
+    // Stage 2 : Alignment Shift & Addition
 
-    // Add or subtract the magnitudes.
-    wire        same_sign = (sl == ss);
-    wire [27:0] mag_sum   = same_sign ? (ml_ext + ms_alig) : (ml_ext - ms_alig);
+    
+    // Comb logic for Stage 2
+    reg align_sticky_w;
+    always @* begin
+        if (s1_shamt <= 8'd3) 
+            align_sticky_w = 1'b0;
+        else if (s1_shamt >= 8'd27) 
+            align_sticky_w = |s1_ms;
+        else 
+            align_sticky_w = |(s1_ms << (5'd27 - s1_shamt[4:0])); 
+    end
 
-    // Normalisation : find the leading 1 in mag_sum
-    reg  [4:0]  lz;
-    reg  [27:0] norm_m;
-    reg  [9:0]  norm_e;        
+    wire [27:0] s1_ms_ext = {1'b0, s1_ms, 3'b000};
+    wire [27:0] ms_alig_w = (s1_shamt >= 8'd28) ? {27'h0, |s1_ms} : ((s1_ms_ext >> s1_shamt) | {27'h0, align_sticky_w});
+    wire [27:0] mag_sum_w = s1_same_sign ? (s1_ml_ext + ms_alig_w) : (s1_ml_ext - ms_alig_w);
+
+    // Stage 2 Pipeline Registers
+    reg [27:0] s2_mag_sum;
+    reg        s2_sl;
+    reg [7:0]  s2_el;
+    reg [7:0]  s2_flags;
+    reg [31:0] s2_a, s2_b_eff;
+
+    always @(posedge clk) begin
+        if (en) begin
+            s2_mag_sum <= mag_sum_w;
+            s2_sl      <= s1_sl;
+            s2_el      <= s1_el;
+            s2_flags   <= s1_flags;
+            s2_a       <= s1_a;
+            s2_b_eff   <= s1_b_eff;
+        end
+    end
+
+
+    // Stage 3 : Normalisation (Leading Zero Count)
+ 
+    // Comb logic for Stage 3
+    reg  [4:0]  lz_w;
+    reg  [27:0] norm_m_w;
+    reg  [9:0]  norm_e_w;        
     integer     i;
-    reg         found;
+    reg         found_w;
 
     always @* begin
-        lz      = 5'd0;
-        found   = 1'b0;
-        norm_m  = mag_sum;
-        norm_e  = {2'b00, el};
+        lz_w      = 5'd0;
+        found_w   = 1'b0;
+        norm_m_w  = s2_mag_sum;
+        norm_e_w  = {2'b00, s2_el};
 
-        if (mag_sum[27]) begin
-            // Carry out from same-sign add : shift right 1, exp += 1
-            norm_m = mag_sum >> 1;
-            norm_e = {2'b00, el} + 10'd1;
-        end else if (mag_sum == 28'h0) begin
-            norm_m = 28'h0;
-            norm_e = 10'h0;
+        if (s2_mag_sum[27]) begin
+            norm_m_w = s2_mag_sum >> 1;
+            norm_e_w = {2'b00, s2_el} + 10'd1;
+        end else if (s2_mag_sum == 28'h0) begin
+            norm_m_w = 28'h0;
+            norm_e_w = 10'h0;
         end else begin
-            // Search for leading 1 in bits [26:0]; ideal position is bit 26.
+            // Search for leading 1
             for (i = 26; i >= 0; i = i - 1) begin
-                if (mag_sum[i] && !found) begin
-                    lz    = 5'd26 - i[4:0];
-                    found = 1'b1;
+                if (s2_mag_sum[i] && !found_w) begin
+                    lz_w    = 5'd26 - i[4:0];
+                    found_w = 1'b1;
                 end
             end
-            if ({5'b0, lz} >= norm_e) begin
-                // Underflow : flush to zero
-                norm_m = 28'h0;
-                norm_e = 10'h0;
+            if ({5'b0, lz_w} >= norm_e_w) begin
+                norm_m_w = 28'h0;
+                norm_e_w = 10'h0;
             end else begin
-                norm_m = mag_sum << lz;
-                norm_e = norm_e - {5'b0, lz};
+                norm_m_w = s2_mag_sum << lz_w;
+                norm_e_w = norm_e_w - {5'b0, lz_w};
             end
         end
     end
 
-    // After normalisation : norm_m[26] is the implicit 1.
-    // Kept fraction is [25:3] (23 bits).
-    // Discarded bits are [2] (Guard), [1] (Round), [0] (Sticky).
+    // Stage 3 Pipeline Registers
+    reg [27:0] s3_norm_m;
+    reg [9:0]  s3_norm_e;
+    reg        s3_sl;
+    reg        s3_mag_sum_zero;
+    reg [7:0]  s3_flags;
+    reg [31:0] s3_a, s3_b_eff;
+
+    always @(posedge clk) begin
+        if (en) begin
+            s3_norm_m       <= norm_m_w;
+            s3_norm_e       <= norm_e_w;
+            s3_sl           <= s2_sl;
+            s3_mag_sum_zero <= (s2_mag_sum == 28'h0);
+            s3_flags        <= s2_flags;
+            s3_a            <= s2_a;
+            s3_b_eff        <= s2_b_eff;
+        end
+    end
+
+
+    // Stage 4 : Rounding & Final Packing
     
-    wire G   = norm_m[2];
-    wire R   = norm_m[1];
-    wire S   = norm_m[0]; 
-    wire LSB = norm_m[3];
+    // Unpack flags for readability
+    wire a_nan_f  = s3_flags[7];
+    wire b_nan_f  = s3_flags[6];
+    wire a_inf_f  = s3_flags[5];
+    wire b_inf_f  = s3_flags[4];
+    wire a_zero_f = s3_flags[3];
+    wire b_zero_f = s3_flags[2];
+    wire sa_f     = s3_flags[1];
+    wire sb_f     = s3_flags[0];
+
+    // Comb logic for Stage 4
+    wire G   = s3_norm_m[2];
+    wire R   = s3_norm_m[1];
+    wire S   = s3_norm_m[0]; 
+    wire LSB = s3_norm_m[3];
     
-    // We can combine R and S into a single sticky state
     wire round_up = G & (R | S | LSB);
-    
-    // Add the round bit. Pad with 01 to catch rounding overflow.
-    wire [24:0] rounded_frac_ext = {2'b01, norm_m[25:3]} + round_up;
+    wire [24:0] rounded_frac_ext = {2'b01, s3_norm_m[25:3]} + round_up;
     
     reg [22:0] frac_final;
     reg [9:0]  exp_final;
     
     always @* begin
         if (rounded_frac_ext[24]) begin 
-            // Overflow
             frac_final = rounded_frac_ext[23:1];
-            exp_final  = norm_e + 10'd1;
+            exp_final  = s3_norm_e + 10'd1;
         end else begin
             frac_final = rounded_frac_ext[22:0];
-            exp_final  = norm_e;
+            exp_final  = s3_norm_e;
         end
     end
 
-    // Result mux : handle specials and pack the normal result
-    reg [31:0] result;
+    reg [31:0] result_w;
     always @* begin
-        if (a_nan || b_nan) begin
-            result = 32'h7FC00000;                              // qNaN
-        end else if (a_inf && b_inf) begin
-            result = (sa == sb) ? {sa, 8'hFF, 23'h0}
-                                : 32'h7FC00000;                 // Inf - Inf
-        end else if (a_inf) begin
-            result = a;
-        end else if (b_inf) begin
-            result = b_eff;
-        end else if (a_zero && b_zero) begin
-            result = 32'h00000000;
-        end else if (a_zero) begin
-            result = b_eff;
-        end else if (b_zero) begin
-            result = a;
-        end else if (mag_sum == 28'h0) begin
-            result = 32'h00000000;                              // exact cancellation
-        end else if (norm_e >= 10'd255) begin
-            result = {sl, 8'hFF, 23'h0};                        // overflow -> Inf
-        end else if (norm_e == 10'h0) begin
-            result = 32'h00000000;                              // underflow -> 0
+        if (a_nan_f || b_nan_f) begin
+            result_w = 32'h7FC00000;
+        end else if (a_inf_f && b_inf_f) begin
+            result_w = (sa_f == sb_f) ? {sa_f, 8'hFF, 23'h0} : 32'h7FC00000; 
+        end else if (a_inf_f) begin
+            result_w = s3_a;
+        end else if (b_inf_f) begin
+            result_w = s3_b_eff;
+        end else if (a_zero_f && b_zero_f) begin
+            result_w = 32'h00000000;
+        end else if (a_zero_f) begin
+            result_w = s3_b_eff;
+        end else if (b_zero_f) begin
+            result_w = s3_a;
+        end else if (s3_mag_sum_zero) begin
+            result_w = 32'h00000000; 
+        end else if (exp_final >= 10'd255) begin
+            result_w = {s3_sl, 8'hFF, 23'h0}; 
+        end else if (exp_final == 10'h0) begin
+            result_w = 32'h00000000; 
         end else begin
-            result = {sl, exp_final[7:0], frac_final};
+            result_w = {s3_sl, exp_final[7:0], frac_final};
         end
     end
 
-    assign y = result;
+    // Final Output Register
+    reg [31:0] y_reg;
+    always @(posedge clk) begin
+        if (en) begin
+            y_reg <= result_w;
+        end
+    end
+
+    assign y = y_reg;
+
 endmodule
