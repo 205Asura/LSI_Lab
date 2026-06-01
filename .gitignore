@@ -1,4 +1,7 @@
-sim/*
-!sim/Makefile
+questa/*
+!questa/Makefile
+
+verilator/*
+!verilator/Makefile
 *.drawio
 

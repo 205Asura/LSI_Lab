@@ -1,3 +1,16 @@
+/*
+fp32_mul (Floating-Point Multiplier)
+
+Algorithm:
+
+- Stage 1: Registers incoming operands, computes the output sign bit using an XOR gate, and packs structural classification exception flags.
+- Stage 2: Drives a 24-bit × 24-bit unsigned integer multiplier matrix to form a raw 48-bit product, while concurrently evaluating the tentative biased exponent via the equation: Enew​=Ea​+Eb​−127.
+- Stage 3: Evaluates the MSB of the product matrix (bit 47) to conditionally execute a 1-bit normalizing right shift (incrementing the exponent tracker) and calculates the Tie-to-Even rounding bit.
+- Stage 4: Performs overflow/underflow multiplexing and registers the packed IEEE-754 output.
+*/
+
+
+
 `timescale 1ns/1ps
 
 module fp32_mul (

@@ -1,3 +1,15 @@
+/*
+fp32_add
+
+Algorithm:
+
+- Stage 1: Unpacks inputs, strips hidden bits, screens for special metrics (NaN, Inf, Zero), and executes an integer magnitude comparison to arrange operands into larger (el) and smaller (es) parameters.
+- Stage 2: Right-shifts the smaller mantissa to align its radix point with the larger value, then computes the raw 28-bit mantissa sum or difference.
+- Stage 3: Normalizes the resulting fraction using an unrolled LZC barrel shifter loop and realigns the exponent vector.
+- Stage 4: Evaluates Guard (G), Round (R), and Sticky (S) bits to enforce Round-to-Nearest (Tie-to-Even) alignment before checking for overflow or underflow boundaries and packing the final 32-bit vector.
+*/
+
+
 `timescale 1ns/1ps
 
 module fp32_add (

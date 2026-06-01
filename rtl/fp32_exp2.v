@@ -1,3 +1,14 @@
+/*
+fp32_exp2 (Floating-Point Exponential)
+
+Algorithm: Computes 2x utilizing an optimized Pade[3,3] Rational Function Approximation.
+
+- Extracts the input scalar and separates it into an isolated integer part (n=⌊x⌋) and a positive fractional remainder (f=x−n).
+- Center-shifts the fraction into a localized domain (t=f−0.5) and computes the corresponding numerator P(t) and denominator Q(t) polynomial approximations via serialized Horner's Scheme multiplier/adder chains.
+- Pipelines the polynomials into the fp32_div module to determine the fractional value P(t)/Q(t).
+- Restores the integer value n by directly adding it to the exponent field of the divided mantissa product, executing a zero-overhead scale multiplication by 2^n.
+*/
+
 `timescale 1ns/1ps
 
 module fp32_exp2 (

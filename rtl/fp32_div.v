@@ -1,3 +1,12 @@
+/*
+Algorithm: Newton-Raphson Iterative Reciprocal Approximation. Rather than relying on a slow, bit-by-bit digit recurrence loop, this architecture eliminates division by solving for the exact reciprocal of the denominator (1/b) and performing a terminal multiplication (a×(1/b)).
+
+- Computes an initial coarse reciprocal guess (y0​) using a hardware seed pipeline implementing the linear equation: y0​=1.5−0.5bnorm​.
+- Unrolls 3 consecutive iteration stages of the Newton-Raphson error-correction equation: yn+1​=yn​×(2−b×yn​). Because each iteration quadratically doubles the number of accurate precision bits, 3 passes comfortably exceed the 24-bit single-precision mantissa threshold.
+- Feeds the finalized reciprocal into an instance of fp32_mul to calculate the final quotient.
+*/
+
+
 `timescale 1ns/1ps
 
 module fp32_div (

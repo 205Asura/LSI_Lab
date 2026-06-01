@@ -1,6 +1,7 @@
 #Define variables
 TESTNAME 	?= tb_cubic_solver
 TB_NAME 	?= tb_cubic_solver
+COMPILE_F	?= ../compile_files
 RADIX		?= hex
 MEALY_FSM   ?= 0
 SIM_DEBUG   ?= 1
@@ -12,16 +13,15 @@ VLOG_DEFINES := $(if $(SIM_DEBUG),+define+SIM_DEBUG,) $(if $(USE_UNISIM),+define
 VLOG_LIBS := $(if $(USE_UNISIM),$(foreach lib,$(XILINX_LIBS),-L $(lib)),)
 VSIM_LIBS := $(if $(USE_UNISIM),$(foreach lib,$(XILINX_LIBS),-L $(lib)),)
 
-#==============================
 
 ARGS := $(MAKECMDGOALS)
 
 # Insert new commands here if you want to add more make targets, use "\" to break lines
-COMMANDS := all all_wave all_cov \
-			build build_cov \
-			run run_cov \
+COMMANDS := all allwave allcov \
+			build buildcov \
+			run runcov \
 			wave \
-			gen_cov gen_html \
+			gencov genhtml \
 			xilinx_libs check_xilinx_libs clean_libs \
 			clean \
 			help
@@ -40,9 +40,9 @@ endif
 
 all: clean build run
 
-all_wave: clean build run wave
+allwave: clean build run wave
 
-all_cov: clean build_cov run_cov
+allcov: clean build_cov run_cov
 
 build: $(if $(USE_UNISIM),check_xilinx_libs,)
 	vlib work
@@ -52,9 +52,9 @@ build: $(if $(USE_UNISIM),check_xilinx_libs,)
 			vmap $$lib $(XILINX_LIB_DIR)/$$lib; \
 		done; \
 	fi
-	vlog $(VLOG_DEFINES) $(VLOG_LIBS) -f compile.f | tee compile.log
+	vlog $(VLOG_DEFINES) $(VLOG_LIBS) -F $(COMPILE_F)/compile.f | tee compile.log
 
-build_cov: $(if $(USE_UNISIM),check_xilinx_libs,)
+buildcov: $(if $(USE_UNISIM),check_xilinx_libs,)
 	vlib work
 	vmap work work
 	@if [ "$(USE_UNISIM)" = "1" ]; then \
@@ -62,24 +62,24 @@ build_cov: $(if $(USE_UNISIM),check_xilinx_libs,)
 			vmap $$lib $(XILINX_LIB_DIR)/$$lib; \
 		done; \
 	fi
-	vlog +cover=bcesft $(VLOG_DEFINES) $(VLOG_LIBS) -f compile.f
+	vlog +cover=bcesft $(VLOG_DEFINES) $(VLOG_LIBS) -F $(COMPILE_F)
 
 run:
 	vsim $(VSIM_LIBS) -debugDB -l $(TESTNAME).log -voptargs=+acc -assertdebug -c $(TB_NAME) -do "log -r /*;run -all;" -GMEALY_FSM=$(MEALY_FSM)
 
-run_cov:
+runcov:
 	vsim $(VSIM_LIBS) -coverage -l $(TESTNAME).log -c $(TB_NAME) -voptargs="+cover=bcesft" -assertdebug -do "do exclude.do; coverage save -onexit $(TESTNAME).ucdb; log -r /*;run -all"
 
 wave:
 	vsim -i -view vsim.wlf -do "add wave vsim:/$(TB_NAME)/dut/*; radix -$(RADIX)" &
 
-gen_cov:
+gencov:
 	mkdir -p coverage
 	vcover merge IP.ucdb *.ucdb
 	vcover report IP.ucdb -output coverage/summary_report.txt
 	vcover report -zeros -details -code bcesft -annotate -All -codeAll IP.ucdb -output coverage/detail_report.txt
 
-gen_html:
+genhtml:
 	mkdir -p coverage
 	vcover merge IP.ucdb *.ucdb
 	vcover report -zeros -details -code bcesft -annotate -testhitdataAll -html IP.ucdb 
@@ -92,6 +92,7 @@ clean:
 	rm -rf *.wlf
 	rm -rf transcript
 	rm -rf *.ucdb
+	rm -rf *.vcd
 
 clean_libs:
 	rm -rf $(XILINX_LIB_DIR)

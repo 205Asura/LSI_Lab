@@ -1,3 +1,24 @@
+// cubic_solver : solves   a*x^3 + b*x^2 + c*x + d = 0   
+// Interface
+//   start        :  pulse 1 cycle to launch a new solve
+//   a, b, c, d   :  coefficients.
+//   done         :  asserted for one cycle when x0/x1/x2 are valid.
+//   x0..x2       :  three roots, each as (real, imag) pair.
+//
+// Algorithm
+//   Normalise :  ba = b/a, ca = c/a, da = d/a.    (a == 0 -> all NaN.)
+//   Depress   :  x = t - ba/3   ->   t^3 + p*t + q = 0
+//                   p = ca - ba^2/3
+//                   q = (2*ba^3)/27 - (ba*ca)/3 + da
+//   Discriminant   D = q^2/4 + p^3/27
+//        D > 0  : Cardano  -> 1 real, 2 complex
+//        D < 0  : trig     -> 3 distinct real
+//        D = 0  : closed   -> double + simple real (or triple)
+//   Un-shift  : x_k = t_k - ba/3.
+//
+// Design module:
+//   Multi-cycle FSM with one shared instance of each unit. Each state drives the FP-unit input mux for one operation, then captures the combinational result into a register at the next clock edge.  
+
 `timescale 1ns/1ps
 
 module cubic_solver (
