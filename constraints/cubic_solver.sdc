@@ -1,6 +1,6 @@
 current_design cubic_solver
 
-create_clock -name "clk" -add -period 10.0 -waveform {0.0 5.0} [get_ports clk]
+create_clock -name "clk" -add -period 5.0 -waveform {0.0 5.0} [get_ports clk]
 
 set_input_delay  -clock [get_clocks clk] -add_delay 1.0 [get_ports rst_n]
 set_input_delay  -clock [get_clocks clk] -add_delay 1.0 [get_ports start]
