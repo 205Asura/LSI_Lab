@@ -1,7 +1,7 @@
-## LSI Logic Design Lab Course 
+# LSI Logic Design Lab Course 
 CO3098 - Group 1 
 
-# Final Scoring 
+## Final Scoring 
 - Lab exercises : 10.0
 - Assigment : 10.0 
 
